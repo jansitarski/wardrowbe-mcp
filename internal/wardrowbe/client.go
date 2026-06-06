@@ -210,6 +210,12 @@ func (c *Client) UpdateItem(ctx context.Context, itemID string, patch ItemUpdate
 	return c.Request(ctx, http.MethodPatch, "/items/"+url.PathEscape(itemID), nil, patch)
 }
 
+// CreateStudioOutfit persists a manually composed outfit (POST /outfits/studio)
+// and returns the raw created outfit payload.
+func (c *Client) CreateStudioOutfit(ctx context.Context, outfit StudioOutfit) (json.RawMessage, error) {
+	return c.Request(ctx, http.MethodPost, "/outfits/studio", nil, outfit)
+}
+
 // CoerceList normalizes a backend list response into a slice of raw messages.
 // It accepts a bare array or an object wrapping the array under any of the known
 // keys (items/results/data/outfits/notifications).
