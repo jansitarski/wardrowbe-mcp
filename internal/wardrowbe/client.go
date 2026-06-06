@@ -3,6 +3,7 @@ package wardrowbe
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -19,6 +20,17 @@ const apiBase = "/api/v1"
 
 // refreshLeeway is subtracted from the token TTL so we re-sync before expiry.
 const refreshLeeway = 30 * time.Second
+
+// Token-cache bounds. The dev backend returns expires_in:null while the JWT
+// itself carries a multi-day exp; without these we would re-sync on every
+// request and overflow the /auth/sync rate limit.
+const (
+	// defaultTokenTTL is used when neither expires_in nor a JWT exp is available.
+	defaultTokenTTL = 30 * time.Minute
+	// minTokenTTL floors the cache window so a missing/near/expired claim can
+	// never degrade into a per-request re-sync storm.
+	minTokenTTL = 60 * time.Second
+)
 
 // APIError represents a non-2xx backend response.
 type APIError struct {
@@ -121,14 +133,55 @@ func (c *Client) syncLocked(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("auth sync: empty access_token")
 	}
 
-	ttl := time.Duration(sr.ExpiresIn) * time.Second
-	if ttl > refreshLeeway {
-		ttl -= refreshLeeway
-	}
+	ttl := tokenTTL(sr)
 	c.token = sr.AccessToken
 	c.expiresAt = time.Now().Add(ttl)
-	c.log.Debug("backend token synced", "external_id", payload.ExternalID, "ttl_s", sr.ExpiresIn)
+	c.log.Debug("backend token synced", "external_id", payload.ExternalID, "ttl_s", int(ttl.Seconds()))
 	return c.token, nil
+}
+
+// tokenTTL decides how long to cache an access token. It prefers expires_in,
+// falls back to the JWT's exp claim (the dev backend reports expires_in:null but
+// signs a long-lived token), then a default — always clamped to >= minTokenTTL
+// so we cannot re-sync on every request.
+func tokenTTL(sr syncResponse) time.Duration {
+	var ttl time.Duration
+	switch {
+	case sr.ExpiresIn > 0:
+		ttl = time.Duration(sr.ExpiresIn) * time.Second
+	default:
+		if exp, ok := jwtExpiry(sr.AccessToken); ok {
+			ttl = time.Until(exp)
+		} else {
+			ttl = defaultTokenTTL
+		}
+	}
+	ttl -= refreshLeeway
+	if ttl < minTokenTTL {
+		ttl = minTokenTTL
+	}
+	return ttl
+}
+
+// jwtExpiry reads the exp claim from a JWT without verifying its signature
+// (the token was just received over TLS from the backend). Returns false if the
+// token is malformed or carries no exp.
+func jwtExpiry(token string) (time.Time, bool) {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return time.Time{}, false
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return time.Time{}, false
+	}
+	var claims struct {
+		Exp int64 `json:"exp"`
+	}
+	if err := json.Unmarshal(payload, &claims); err != nil || claims.Exp == 0 {
+		return time.Time{}, false
+	}
+	return time.Unix(claims.Exp, 0), true
 }
 
 // Request issues an authenticated JSON request to apiBase+path and returns the

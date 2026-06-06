@@ -14,7 +14,7 @@ import (
 
 const (
 	serverName    = "wardrowbe-mcp"
-	serverVersion = "0.2.1"
+	serverVersion = "0.2.2"
 )
 
 // Server bundles the runtime dependencies shared by every tool handler.
