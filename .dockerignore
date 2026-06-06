@@ -1,0 +1,10 @@
+.git
+.gitignore
+.idea
+.vscode
+*.test
+/out
+/wardrowbe-mcp
+docs
+README.md
+Makefile
