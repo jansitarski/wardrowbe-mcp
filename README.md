@@ -15,7 +15,15 @@ Claude (Desktop / Mobile / Code).
 
 ## Status
 
-Design phase. No code yet — start from the spec.
+Implemented (v0.1.0). Single static Go binary exposing **27 MCP tools** (22 parity
++ `get_item_image`, `get_outfit_images`, `update_item`, `set_item_tags`,
+`set_item_description`) over Streamable HTTP and stdio. `go test -race ./...` green.
+
+```bash
+go test -race ./...        # unit tests (config, client retry, image, auth gate)
+go build ./cmd/wardrowbe-mcp
+docker build -t wardrowbe-mcp .
+```
 
 ## Docs
 
@@ -47,6 +55,13 @@ go build -o wardrowbe-mcp ./cmd/wardrowbe-mcp
   --wardrowbe-url http://backend.wardrowbe.svc.cluster.local:8000 \
   --auth dev --external-id <web-user-external-id> --external-email <real-email> \
   --api-key "$MCP_API_KEY"
+```
+
+To emit the RFC 9728 `WWW-Authenticate` header natively (retiring the Cloudflare
+Transform Rule), pass `--portal-resource-url`:
+
+```bash
+  --portal-resource-url https://wardrowbe-portal.sitarski.tech/.well-known/oauth-protected-resource
 ```
 
 ## License
