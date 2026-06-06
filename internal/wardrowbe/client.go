@@ -269,6 +269,12 @@ func (c *Client) CreateStudioOutfit(ctx context.Context, outfit StudioOutfit) (j
 	return c.Request(ctx, http.MethodPost, "/outfits/studio", nil, outfit)
 }
 
+// DeleteOutfit permanently removes an outfit (DELETE /outfits/{id}). The backend
+// replies 204, so a nil body indicates success.
+func (c *Client) DeleteOutfit(ctx context.Context, outfitID string) (json.RawMessage, error) {
+	return c.Request(ctx, http.MethodDelete, "/outfits/"+url.PathEscape(outfitID), nil, nil)
+}
+
 // CoerceList normalizes a backend list response into a slice of raw messages.
 // It accepts a bare array or an object wrapping the array under any of the known
 // keys (items/results/data/outfits/notifications).
