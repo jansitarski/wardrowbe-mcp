@@ -2,10 +2,12 @@ package wardrowbe
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func TestCoerceList(t *testing.T) {
@@ -100,6 +102,69 @@ func TestRequestReturnsAPIErrorOnPersistent401(t *testing.T) {
 	}
 	if apiErr.StatusCode != http.StatusUnauthorized {
 		t.Errorf("status = %d, want 401", apiErr.StatusCode)
+	}
+}
+
+// makeJWT builds an unsigned-payload JWT carrying the given exp (the client
+// reads exp without verifying the signature).
+func makeJWT(exp int64) string {
+	enc := func(v any) string {
+		b, _ := json.Marshal(v)
+		return base64.RawURLEncoding.EncodeToString(b)
+	}
+	return enc(map[string]string{"alg": "HS256", "typ": "JWT"}) + "." +
+		enc(map[string]int64{"exp": exp}) + ".sig"
+}
+
+func TestCachesTokenWhenExpiresInNull(t *testing.T) {
+	// Reproduces the rate-limit bug: dev /auth/sync omits expires_in but the JWT
+	// carries a future exp. The client must cache it and NOT re-sync per request.
+	var syncCount int
+	jwt := makeJWT(time.Now().Add(time.Hour).Unix())
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/auth/sync" {
+			syncCount++
+			// expires_in deliberately absent (null) — mirrors the dev backend.
+			_, _ = w.Write([]byte(`{"access_token":"` + jwt + `"}`))
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, &fakeProvider{}, srv.Client(), nil)
+	for i := 0; i < 5; i++ {
+		if _, err := c.Request(context.Background(), http.MethodGet, "/items", nil, nil); err != nil {
+			t.Fatalf("request %d failed: %v", i, err)
+		}
+	}
+	if syncCount != 1 {
+		t.Errorf("expected exactly 1 auth sync across 5 requests, got %d (token not cached)", syncCount)
+	}
+}
+
+func TestTokenTTLFallbacks(t *testing.T) {
+	future := time.Now().Add(2 * time.Hour).Unix()
+	tests := []struct {
+		name string
+		sr   syncResponse
+		min  time.Duration // expected ttl is at least this
+	}{
+		{"explicit expires_in", syncResponse{AccessToken: "x", ExpiresIn: 3600}, time.Hour - refreshLeeway - time.Second},
+		{"null expires_in uses jwt exp", syncResponse{AccessToken: makeJWT(future)}, 90 * time.Minute},
+		{"no exp, no expires_in uses default", syncResponse{AccessToken: "not-a-jwt"}, defaultTokenTTL - refreshLeeway - time.Second},
+		{"expired jwt clamps to min", syncResponse{AccessToken: makeJWT(time.Now().Add(-time.Hour).Unix())}, minTokenTTL - time.Second},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tokenTTL(tt.sr)
+			if got < tt.min {
+				t.Errorf("ttl = %v, want >= %v", got, tt.min)
+			}
+			if got < minTokenTTL {
+				t.Errorf("ttl = %v below floor %v", got, minTokenTTL)
+			}
+		})
 	}
 }
 

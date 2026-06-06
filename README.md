@@ -15,7 +15,7 @@ Claude (Desktop / Mobile / Code).
 
 ## Status
 
-Implemented (v0.2.1). Single static Go binary exposing **28 MCP tools** (22 parity
+Implemented (v0.2.2). Single static Go binary exposing **28 MCP tools** (22 parity
 + `get_item_image`, `get_outfit_images`, `update_item`, `set_item_tags`,
 `set_item_description`, and `create_outfit` — let Claude compose an outfit from
 chosen item ids and persist it via `POST /outfits/studio` instead of delegating to
