@@ -1,0 +1,8 @@
+# Go
+/wardrowbe-mcp
+/out/
+*.test
+
+# Editor
+.idea/
+.vscode/
