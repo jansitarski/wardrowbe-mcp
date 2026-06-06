@@ -15,11 +15,12 @@ Claude (Desktop / Mobile / Code).
 
 ## Status
 
-Implemented (v0.2.2). Single static Go binary exposing **28 MCP tools** (22 parity
+Implemented (v0.2.3). Single static Go binary exposing **29 MCP tools** (22 parity
 + `get_item_image`, `get_outfit_images`, `update_item`, `set_item_tags`,
-`set_item_description`, and `create_outfit` — let Claude compose an outfit from
-chosen item ids and persist it via `POST /outfits/studio` instead of delegating to
-the weak in-cluster model) over Streamable HTTP and stdio. `go test -race ./...` green.
+`set_item_description`, `create_outfit` — let Claude compose an outfit from chosen
+item ids and persist it via `POST /outfits/studio` instead of delegating to the weak
+in-cluster model — and `delete_outfit` to remove any outfit by id) over Streamable
+HTTP and stdio. `go test -race ./...` green.
 
 ```bash
 go test -race ./...        # unit tests (config, client retry, image, auth gate)

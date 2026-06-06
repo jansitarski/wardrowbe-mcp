@@ -212,6 +212,31 @@ func TestCreateStudioOutfitPostsExpectedBody(t *testing.T) {
 	}
 }
 
+func TestDeleteOutfitIssuesDeleteAndHandles204(t *testing.T) {
+	var gotMethod, gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/auth/sync" {
+			_ = json.NewEncoder(w).Encode(map[string]any{"access_token": "tok", "expires_in": 3600})
+			return
+		}
+		gotMethod, gotPath = r.Method, r.URL.Path
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, &fakeProvider{}, srv.Client(), nil)
+	raw, err := c.DeleteOutfit(context.Background(), "o-123")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotMethod != http.MethodDelete || gotPath != "/api/v1/outfits/o-123" {
+		t.Errorf("got %s %s, want DELETE /api/v1/outfits/o-123", gotMethod, gotPath)
+	}
+	if raw != nil {
+		t.Errorf("expected nil body for 204, got %q", string(raw))
+	}
+}
+
 func TestRequest204ReturnsNilBody(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/v1/auth/sync" {

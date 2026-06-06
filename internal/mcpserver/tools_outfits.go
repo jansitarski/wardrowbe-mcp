@@ -47,6 +47,14 @@ func (s *Server) registerOutfitTools() {
 		mcp.WithString("outfit_id", mcp.Required(), mcp.Description("Outfit id.")),
 	), s.handleGetOutfit)
 
+	s.add(mcp.NewTool("delete_outfit",
+		mcp.WithDescription("Permanently delete an outfit by id (DELETE /outfits/{id}). Works on ANY "+
+			"outfit, not just the latest — get the id from get_recent_outfits/get_outfit. This removes "+
+			"the outfit entirely; use reject_latest_outfit/skip to merely dismiss a suggestion."),
+		mcp.WithDestructiveHintAnnotation(true),
+		mcp.WithString("outfit_id", mcp.Required(), mcp.Description("Outfit id to delete.")),
+	), s.handleDeleteOutfit)
+
 	s.add(mcp.NewTool("get_recent_outfits",
 		mcp.WithDescription("List recent outfits, optionally filtered by status."),
 		mcp.WithReadOnlyHintAnnotation(true),
@@ -174,6 +182,21 @@ func (s *Server) handleGetOutfit(ctx context.Context, req mcp.CallToolRequest) (
 		return mcp.NewToolResultErrorFromErr("get outfit failed", err), nil
 	}
 	return jsonText(raw), nil
+}
+
+func (s *Server) handleDeleteOutfit(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	outfitID, err := req.RequireString("outfit_id")
+	if err != nil {
+		return mcp.NewToolResultError("outfit_id is required"), nil
+	}
+	raw, err := s.client.DeleteOutfit(ctx, outfitID)
+	if err != nil {
+		return mcp.NewToolResultErrorFromErr("delete outfit failed", err), nil
+	}
+	if raw != nil {
+		return jsonText(raw), nil
+	}
+	return marshalText(map[string]any{"ok": true, "deleted_outfit_id": outfitID})
 }
 
 func (s *Server) handleRecentOutfits(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
