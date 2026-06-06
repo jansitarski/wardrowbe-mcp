@@ -103,6 +103,50 @@ func TestRequestReturnsAPIErrorOnPersistent401(t *testing.T) {
 	}
 }
 
+func TestCreateStudioOutfitPostsExpectedBody(t *testing.T) {
+	var gotPath, gotMethod string
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/auth/sync" {
+			_ = json.NewEncoder(w).Encode(map[string]any{"access_token": "tok", "expires_in": 3600})
+			return
+		}
+		gotPath, gotMethod = r.URL.Path, r.Method
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": "outfit-1", "status": "created"})
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, &fakeProvider{}, srv.Client(), nil)
+	name := "Friday fit"
+	raw, err := c.CreateStudioOutfit(context.Background(), StudioOutfit{
+		Items:    []string{"a", "b"},
+		Occasion: "casual",
+		Name:     &name,
+		MarkWorn: true,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotMethod != http.MethodPost || gotPath != "/api/v1/outfits/studio" {
+		t.Errorf("got %s %s, want POST /api/v1/outfits/studio", gotMethod, gotPath)
+	}
+	if items, _ := gotBody["items"].([]any); len(items) != 2 {
+		t.Errorf("items = %v, want 2 entries", gotBody["items"])
+	}
+	if gotBody["occasion"] != "casual" || gotBody["name"] != "Friday fit" || gotBody["mark_worn"] != true {
+		t.Errorf("unexpected body: %#v", gotBody)
+	}
+	// nil pointers must be omitted — the backend rejects unknown/extra fields.
+	if _, ok := gotBody["source_item_id"]; ok {
+		t.Error("source_item_id should be omitted when nil")
+	}
+	if string(raw) == "" {
+		t.Error("expected created outfit body")
+	}
+}
+
 func TestRequest204ReturnsNilBody(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/v1/auth/sync" {

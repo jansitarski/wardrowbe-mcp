@@ -41,6 +41,18 @@ type ItemTags struct {
 	Fit          *string  `json:"fit,omitempty"`
 }
 
+// StudioOutfit is the POST /outfits/studio body — a manually composed outfit
+// persisted from explicit item ids (the backend rejects unknown fields, so this
+// must mirror StudioCreateRequest exactly).
+type StudioOutfit struct {
+	Items        []string `json:"items"`    // 1-20 item ids
+	Occasion     string   `json:"occasion"` // free text, <= 50 chars
+	Name         *string  `json:"name,omitempty"`
+	ScheduledFor *string  `json:"scheduled_for,omitempty"` // YYYY-MM-DD
+	MarkWorn     bool     `json:"mark_worn"`
+	SourceItemID *string  `json:"source_item_id,omitempty"`
+}
+
 // ItemUpdate is the PATCH /items/{id} body. All fields optional — pointers and
 // slices are omitted when nil so a partial update never clears untouched fields.
 type ItemUpdate struct {

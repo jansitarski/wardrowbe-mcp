@@ -4,18 +4,37 @@ import (
 	"context"
 	"net/http"
 	"net/url"
+	"strings"
 
+	"github.com/jansitarski/wardrowbe-mcp/internal/wardrowbe"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
 func (s *Server) registerOutfitTools() {
 	s.add(mcp.NewTool("suggest_outfit",
-		mcp.WithDescription("Request an outfit suggestion for an occasion and time of day."),
+		mcp.WithDescription("Ask the in-cluster model to generate an outfit suggestion. NOTE: that "+
+			"model is intentionally weak — prefer composing the outfit yourself (use list_items + "+
+			"get_item_image to see garments) and persisting it with create_outfit."),
 		mcp.WithString("occasion", mcp.Description("Occasion."), mcp.Enum(occasionList()...)),
 		mcp.WithString("time_of_day", mcp.Description("Time of day."), mcp.Enum(timeOfDayList()...)),
 		mcp.WithString("target_date", mcp.Description("Target date, YYYY-MM-DD.")),
 		mcp.WithString("notes", mcp.Description("Free-text styling notes/constraints.")),
 	), s.handleSuggestOutfit)
+
+	s.add(mcp.NewTool("create_outfit",
+		mcp.WithDescription("Persist an outfit YOU composed, directly from explicit item ids "+
+			"(POST /outfits/studio). Use this — not suggest_outfit — when you have chosen the "+
+			"garments yourself: it saves your pick to Wardrowbe without delegating to the weak "+
+			"in-cluster model. Provide 1-20 item ids (from list_items / get_item / get_item_image)."),
+		mcp.WithArray("item_ids", mcp.Required(),
+			mcp.Description("Chosen item ids, 1-20."), mcp.WithStringItems()),
+		mcp.WithString("occasion", mcp.Required(),
+			mcp.Description("Occasion (must be one of the supported values)."), mcp.Enum(occasionList()...)),
+		mcp.WithString("name", mcp.Description("Optional outfit name (up to 100 chars).")),
+		mcp.WithString("scheduled_for", mcp.Description("Optional date to schedule it for, YYYY-MM-DD.")),
+		mcp.WithBoolean("mark_worn", mcp.Description("Also mark the outfit (and its items) worn now. Default false.")),
+		mcp.WithString("source_item_id", mcp.Description("Optional seed item id this outfit was built around.")),
+	), s.handleCreateOutfit)
 
 	s.add(mcp.NewTool("get_latest_outfit",
 		mcp.WithDescription("Get the most recent outfit."),
@@ -81,6 +100,54 @@ func (s *Server) handleSuggestOutfit(ctx context.Context, req mcp.CallToolReques
 	raw, err := s.client.Request(ctx, http.MethodPost, "/outfits/suggest", nil, body)
 	if err != nil {
 		return mcp.NewToolResultErrorFromErr("outfit suggestion failed", err), nil
+	}
+	return jsonText(raw), nil
+}
+
+const (
+	maxOutfitItems   = 20
+	maxOutfitNameLen = 100
+)
+
+func (s *Server) handleCreateOutfit(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	itemIDs, err := req.RequireStringSlice("item_ids")
+	if err != nil || len(itemIDs) == 0 {
+		return mcp.NewToolResultError("item_ids is required (1-20 item ids)"), nil
+	}
+	if len(itemIDs) > maxOutfitItems {
+		return mcp.NewToolResultErrorf("too many items: %d (max %d)", len(itemIDs), maxOutfitItems), nil
+	}
+
+	occasion, err := req.RequireString("occasion")
+	if err != nil || occasion == "" {
+		return mcp.NewToolResultError("occasion is required"), nil
+	}
+	if _, ok := validOccasions[occasion]; !ok {
+		return mcp.NewToolResultErrorf("invalid occasion %q (must be one of: %s)",
+			occasion, strings.Join(occasionList(), ", ")), nil
+	}
+
+	outfit := wardrowbe.StudioOutfit{
+		Items:    itemIDs,
+		Occasion: occasion,
+		MarkWorn: req.GetBool("mark_worn", false),
+	}
+	if name := req.GetString("name", ""); name != "" {
+		if len(name) > maxOutfitNameLen {
+			return mcp.NewToolResultErrorf("name too long: %d chars (max %d)", len(name), maxOutfitNameLen), nil
+		}
+		outfit.Name = &name
+	}
+	if d := req.GetString("scheduled_for", ""); d != "" {
+		outfit.ScheduledFor = &d
+	}
+	if sid := req.GetString("source_item_id", ""); sid != "" {
+		outfit.SourceItemID = &sid
+	}
+
+	raw, err := s.client.CreateStudioOutfit(ctx, outfit)
+	if err != nil {
+		return mcp.NewToolResultErrorFromErr("create outfit failed", err), nil
 	}
 	return jsonText(raw), nil
 }
