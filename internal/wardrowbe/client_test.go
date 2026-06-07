@@ -1,14 +1,41 @@
 package wardrowbe
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
+
+func TestAPIErrorDoesNotLeakBody(t *testing.T) {
+	err := &APIError{
+		StatusCode: 400,
+		Method:     http.MethodGet,
+		Path:       "/items/x",
+		Body:       `{"detail":"token eyJsecret leaked"}`,
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "400") || !strings.Contains(msg, "/items/x") {
+		t.Errorf("error should report status and path, got %q", msg)
+	}
+	if strings.Contains(msg, "eyJsecret") || strings.Contains(msg, "detail") {
+		t.Errorf("error must NOT surface the backend body, got %q", msg)
+	}
+}
+
+func TestReadBoundedBodyRejectsOversize(t *testing.T) {
+	if _, err := readBoundedBody(bytes.NewReader(make([]byte, maxAPIResponseBytes+1))); err == nil {
+		t.Error("expected error for oversize body")
+	}
+	if data, err := readBoundedBody(bytes.NewReader([]byte("ok"))); err != nil || string(data) != "ok" {
+		t.Errorf("small body: got %q, err %v", data, err)
+	}
+}
 
 func TestCoerceList(t *testing.T) {
 	tests := []struct {

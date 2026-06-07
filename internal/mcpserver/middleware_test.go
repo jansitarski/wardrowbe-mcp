@@ -19,6 +19,8 @@ func testServer(t *testing.T, portalURL string) *Server {
 		ImageVariant:      config.VariantMedium,
 		ImageMaxDim:       768,
 		PortalResourceURL: portalURL,
+		MaxConcurrent:     4,
+		MaxBodyBytes:      40 << 20,
 	}
 	client := wardrowbe.NewClient("http://unused", wardrowbe.DevTokenProvider{ExternalID: "x"}, nil, slog.Default())
 	return New(cfg, client, slog.Default())
@@ -37,7 +39,7 @@ func TestRootProbeIsAnonymous(t *testing.T) {
 }
 
 func TestMCPWithoutBearerReturns401WithWWWAuthenticate(t *testing.T) {
-	portal := "https://wardrowbe-portal.sitarski.tech/.well-known/oauth-protected-resource"
+	portal := "https://portal.example.com/.well-known/oauth-protected-resource"
 	srv := testServer(t, portal)
 	rec := httptest.NewRecorder()
 	srv.HTTPHandler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/mcp", nil))
@@ -59,6 +61,55 @@ func TestMCPWithWrongBearerReturns401(t *testing.T) {
 	srv.HTTPHandler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401", rec.Code)
+	}
+}
+
+func TestConcurrencyLimitReturns503WhenSaturated(t *testing.T) {
+	srv := testServer(t, "")
+	srv.sem = make(chan struct{}, 1) // cap 1 for a deterministic test
+
+	release := make(chan struct{})
+	entered := make(chan struct{})
+	blocking := srv.limitConcurrency(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(entered)
+		<-release
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	// Occupy the only slot.
+	go blocking.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/mcp", nil))
+	<-entered
+
+	// Second request must be rejected immediately with 503.
+	rec := httptest.NewRecorder()
+	blocking.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/mcp", nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("saturated status = %d, want 503", rec.Code)
+	}
+	if rec.Header().Get("Retry-After") == "" {
+		t.Error("expected Retry-After header on 503")
+	}
+	close(release)
+}
+
+func TestReadyzReturns503WhenBackendUnreachable(t *testing.T) {
+	srv := testServer(t, "") // client points at http://unused → Ping fails
+	rec := httptest.NewRecorder()
+	srv.HTTPHandler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("readyz status = %d, want 503", rec.Code)
+	}
+}
+
+func TestPanicRecoveryReturns500(t *testing.T) {
+	srv := testServer(t, "")
+	h := srv.recoverPanic(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		panic("boom")
+	}))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("panic status = %d, want 500", rec.Code)
 	}
 }
 

@@ -9,7 +9,11 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
+
+// oidcHTTPTimeout bounds OIDC discovery/token requests when no client is injected.
+const oidcHTTPTimeout = 30 * time.Second
 
 // TokenProvider yields the identity payload sent to /auth/sync. The dev provider
 // returns static values; the OIDC provider refreshes an id_token and projects
@@ -141,6 +145,16 @@ func (o OIDCTokenProvider) discoverTokenEndpoint(ctx context.Context) (string, e
 	if disc.TokenEndpoint == "" {
 		return "", fmt.Errorf("oidc: discovery missing token_endpoint")
 	}
+	// The client secret and refresh token are POSTed to this endpoint, so refuse
+	// a discovery document that points it off the issuer's own (https) host —
+	// that would let a tampered/MITM'd document harvest credentials.
+	ep, err := url.Parse(disc.TokenEndpoint)
+	if err != nil || ep.Scheme != "https" {
+		return "", fmt.Errorf("oidc: token_endpoint is not a valid https URL")
+	}
+	if iss, err := url.Parse(o.Issuer); err == nil && !strings.EqualFold(ep.Host, iss.Host) {
+		return "", fmt.Errorf("oidc: token_endpoint host %q does not match issuer host %q", ep.Host, iss.Host)
+	}
 	return disc.TokenEndpoint, nil
 }
 
@@ -148,7 +162,8 @@ func (o OIDCTokenProvider) client() *http.Client {
 	if o.HTTPClient != nil {
 		return o.HTTPClient
 	}
-	return http.DefaultClient
+	// Never fall back to http.DefaultClient — it has no timeout.
+	return &http.Client{Timeout: oidcHTTPTimeout}
 }
 
 // decodeIDTokenClaims extracts the payload of a JWT without verifying its
