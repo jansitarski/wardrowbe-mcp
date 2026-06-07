@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"net/url"
 	"strings"
 	"sync"
@@ -267,6 +269,93 @@ func (c *Client) UpdateItem(ctx context.Context, itemID string, patch ItemUpdate
 // and returns the raw created outfit payload.
 func (c *Client) CreateStudioOutfit(ctx context.Context, outfit StudioOutfit) (json.RawMessage, error) {
 	return c.Request(ctx, http.MethodPost, "/outfits/studio", nil, outfit)
+}
+
+// CreateItemFromImage uploads image bytes plus optional metadata as
+// multipart/form-data to POST /items and returns the raw created item. The
+// backend stores the image and queues AI auto-tagging.
+func (c *Client) CreateItemFromImage(ctx context.Context, data []byte, filename, mime string, fields map[string]string) (json.RawMessage, error) {
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+
+	hdr := make(textproto.MIMEHeader)
+	hdr.Set("Content-Disposition", fmt.Sprintf(`form-data; name="image"; filename=%q`, filename))
+	hdr.Set("Content-Type", mime)
+	part, err := mw.CreatePart(hdr)
+	if err != nil {
+		return nil, fmt.Errorf("build multipart: %w", err)
+	}
+	if _, err := part.Write(data); err != nil {
+		return nil, fmt.Errorf("write image part: %w", err)
+	}
+	for k, v := range fields {
+		if v == "" {
+			continue
+		}
+		if err := mw.WriteField(k, v); err != nil {
+			return nil, fmt.Errorf("write field %q: %w", k, err)
+		}
+	}
+	if err := mw.Close(); err != nil {
+		return nil, fmt.Errorf("close multipart: %w", err)
+	}
+
+	return c.requestRaw(ctx, http.MethodPost, "/items", mw.FormDataContentType(), buf.Bytes())
+}
+
+// requestRaw is the raw-body sibling of Request: it sends a pre-encoded body
+// with an explicit Content-Type and applies the same 401-resync-once retry.
+func (c *Client) requestRaw(ctx context.Context, method, path, contentType string, body []byte) (json.RawMessage, error) {
+	raw, status, err := c.doRaw(ctx, method, path, contentType, body, false)
+	if err != nil {
+		return nil, err
+	}
+	if status == http.StatusUnauthorized {
+		c.log.Debug("backend 401, re-syncing token", "path", path)
+		raw, status, err = c.doRaw(ctx, method, path, contentType, body, true)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if status == http.StatusNoContent {
+		return nil, nil
+	}
+	if status < 200 || status >= 300 {
+		return nil, &APIError{StatusCode: status, Method: method, Path: path, Body: string(raw)}
+	}
+	return raw, nil
+}
+
+func (c *Client) doRaw(ctx context.Context, method, path, contentType string, body []byte, forceResync bool) (json.RawMessage, int, error) {
+	var token string
+	var err error
+	if forceResync {
+		token, err = c.forceSync(ctx)
+	} else {
+		token, err = c.ensureToken(ctx)
+	}
+	if err != nil {
+		return nil, 0, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+apiBase+path, bytes.NewReader(body))
+	if err != nil {
+		return nil, 0, fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", contentType)
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, 0, fmt.Errorf("%s %s: %w", method, path, err)
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, resp.StatusCode, fmt.Errorf("%s %s: read body: %w", method, path, err)
+	}
+	return raw, resp.StatusCode, nil
 }
 
 // DeleteOutfit permanently removes an outfit (DELETE /outfits/{id}). The backend
