@@ -15,12 +15,14 @@ Claude (Desktop / Mobile / Code).
 
 ## Status
 
-Implemented (v0.2.4). Single static Go binary exposing **30 MCP tools** (22 parity
+Implemented (v0.2.5). Single static Go binary exposing **31 MCP tools** (22 parity
 + `get_item_image`, `get_outfit_images`, `update_item`, `set_item_tags`,
 `set_item_description`, `create_outfit` — compose an outfit from chosen item ids via
-`POST /outfits/studio` — `delete_outfit` to remove any outfit by id, and
+`POST /outfits/studio` — `delete_outfit` to remove any outfit by id,
 `create_item_from_url` — add a garment from a public image URL, SSRF-guarded, which
-the server uploads to `POST /items` for backend auto-tagging) over Streamable HTTP
+the server uploads to `POST /items` for backend auto-tagging — and
+`create_item_from_base64` — add a garment from an inline base64 image (raw or data
+URL) for when the photo is local and has no public URL) over Streamable HTTP
 and stdio. `go test -race ./...` green.
 
 ```bash
