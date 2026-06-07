@@ -31,7 +31,10 @@ func (s *Server) registerCreateTools() {
 			"image and uploads it to Wardrowbe (the backend then auto-tags it). Use this to add a "+
 			"garment from a product/photo link; afterwards refine attributes with get_item_image + "+
 			"set_item_tags/set_item_description. Note: only http(s) URLs to public hosts are allowed, "+
-			"and Claude cannot upload an image pasted into the chat — pass a URL."),
+			"and Claude cannot upload an image pasted into the chat — pass a URL. If the photo is only "+
+			"on local disk, either use create_item_from_base64, or upload it to a temporary public host "+
+			"such as litterbox.catbox.moe (POST reqtype=fileupload, time=1h, fileToUpload=@photo to "+
+			"https://litterbox.catbox.moe/resources/internals/api.php) and pass the returned 1-hour URL."),
 		mcp.WithString("image_url", mcp.Required(), mcp.Description("Public http(s) URL of the garment image.")),
 		mcp.WithString("name", mcp.Description("Optional item name.")),
 		mcp.WithString("type", mcp.Description("Optional item type (e.g. shirt, pants, jacket).")),
