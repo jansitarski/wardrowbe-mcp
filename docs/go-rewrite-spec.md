@@ -28,7 +28,7 @@ Target deploy: drop-in replacement for the current `wardrowbe-mcp` Deployment in
     `WWW-Authenticate: Bearer resource_metadata="…"` on 401, so that workaround can
     be retired (keep it harmlessly, or remove once verified).
   - **Dev-sync email flap.** Add an explicit `MCP_EXTERNAL_EMAIL` so dev `/auth/sync`
-    can send the real `user@example.com` instead of `<external-id>@wardrowbe.local`,
+    can send the real `you@example.com` instead of `<external-id>@wardrowbe.local`,
     eliminating the email field flapping between web and MCP logins.
 
 ---
@@ -71,7 +71,7 @@ Mirror the Python flags/env, plus the new ones. Flags override env.
 | `--wardrowbe-url` | `WARDROWBE_URL` | `http://127.0.0.1:8000` | backend base (no `/api/v1`) |
 | `--api-key` | `MCP_API_KEY` | — | **required for http**; incoming Bearer |
 | `--auth` | `MCP_AUTH_MODE` | `dev` | `dev` or `oidc` |
-| `--external-id` | `MCP_EXTERNAL_ID` | `wardrowbe-mcp` | dev identity (must match the web user's `external_id`, e.g. `your-user-id`) |
+| `--external-id` | `MCP_EXTERNAL_ID` | `wardrowbe-mcp` | dev identity (must match the web user's `external_id`, e.g. `you-example-com`) |
 | `--external-email` | `MCP_EXTERNAL_EMAIL` | `<external-id>@wardrowbe.local` | **NEW** — send the real email in dev sync to stop the email flap |
 | `--oidc-issuer-url` | `MCP_OIDC_ISSUER_URL` | — | oidc mode |
 | `--oidc-client-id` | `MCP_OIDC_CLIENT_ID` | — | oidc mode |
@@ -182,8 +182,8 @@ Return shape (MCP image content block):
 { "type": "image", "data": "<base64>", "mimeType": "image/jpeg" }
 ```
 
-**Token economy (important):** default to `medium`/`thumb`, never auto-return all 27
-items. `get_outfit_images` returns only the garments in that outfit. Cap dimension at
+**Token economy (important):** default to `medium`/`thumb`, never auto-return the whole
+wardrobe. `get_outfit_images` returns only the garments in that outfit. Cap dimension at
 `--image-max-dim`. Document that each image costs vision tokens.
 
 ---
@@ -320,8 +320,8 @@ args:
   - --port=8080
   - --wardrowbe-url=http://backend.wardrowbe.svc.cluster.local:8000
   - --auth=dev
-  - --external-id=your-user-id
-  - --external-email=user@example.com      # NEW — stops email flap
+  - --external-id=you-example-com
+  - --external-email=you@example.com           # NEW — stops email flap
 env:
   - { name: MCP_API_KEY, valueFrom: { secretKeyRef: { name: wardrowbe-mcp-secrets, key: mcp-api-key } } }
   - { name: MCP_LOG_LEVEL, value: "INFO" }
@@ -337,7 +337,7 @@ changes.
 1. Build the Go image; deploy behind a **temporary** second Service or just swap the
    image and watch logs.
 2. **Parity tests** (all 22 tools) — `health` now returns `{healthy:true}`; spot-check
-   `get_wardrobe_summary` (27 items), `list_items`, `suggest_outfit`, `log_wear`/`log_wash`.
+   `get_wardrobe_summary`, `list_items`, `suggest_outfit`, `log_wear`/`log_wash`.
 3. **Image tests** — `get_item_image` returns a viewable photo; `get_outfit_images`.
 4. **Write-back tests** — `set_item_tags` then `get_item` shows the new tags;
    confirm the web UI reflects them.

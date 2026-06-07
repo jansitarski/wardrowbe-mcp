@@ -26,11 +26,11 @@ func TestLoadFlagsOverrideEnv(t *testing.T) {
 }
 
 func TestExternalEmailDefaultsFromID(t *testing.T) {
-	cfg, err := Load([]string{"--api-key", "k", "--external-id", "your-user-id"})
+	cfg, err := Load([]string{"--api-key", "k", "--external-id", "alice-example-com"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	want := "your-user-id@wardrowbe.local"
+	want := "alice-example-com@wardrowbe.local"
 	if cfg.ExternalEmail != want {
 		t.Errorf("default external email: got %q, want %q", cfg.ExternalEmail, want)
 	}

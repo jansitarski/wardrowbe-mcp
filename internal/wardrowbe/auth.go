@@ -9,7 +9,11 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
+
+// oidcHTTPTimeout bounds OIDC discovery/token requests when no client is injected.
+const oidcHTTPTimeout = 30 * time.Second
 
 // TokenProvider yields the identity payload sent to /auth/sync. The dev provider
 // returns static values; the OIDC provider refreshes an id_token and projects
@@ -148,7 +152,8 @@ func (o OIDCTokenProvider) client() *http.Client {
 	if o.HTTPClient != nil {
 		return o.HTTPClient
 	}
-	return http.DefaultClient
+	// Never fall back to http.DefaultClient — it has no timeout.
+	return &http.Client{Timeout: oidcHTTPTimeout}
 }
 
 // decodeIDTokenClaims extracts the payload of a JWT without verifying its
