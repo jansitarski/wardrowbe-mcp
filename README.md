@@ -15,7 +15,7 @@ Claude (Desktop / Mobile / Code).
 
 ## Status
 
-Implemented (v0.2.5). Single static Go binary exposing **31 MCP tools** (22 parity
+Implemented (v0.3.0). Single static Go binary exposing **31 MCP tools** (22 parity
 + `get_item_image`, `get_outfit_images`, `update_item`, `set_item_tags`,
 `set_item_description`, `create_outfit` — compose an outfit from chosen item ids via
 `POST /outfits/studio` — `delete_outfit` to remove any outfit by id,
@@ -24,6 +24,18 @@ the server uploads to `POST /items` for backend auto-tagging — and
 `create_item_from_base64` — add a garment from an inline base64 image (raw or data
 URL) for when the photo is local and has no public URL) over Streamable HTTP
 and stdio. `go test -race ./...` green.
+
+### HTTP endpoints & production hardening (v0.3.0)
+
+- `GET /` — **liveness** (static; process is up, no backend dependency).
+- `GET /readyz` — **readiness** (pings the backend within 3s; `503` when it's down).
+  Wire k8s `readinessProbe` here and `livenessProbe` to `/`.
+- `POST /mcp` — bearer-gated MCP endpoint, wrapped with an inbound body-size cap
+  (`--max-body-mb`, default 40) and a concurrency limiter (`--max-concurrent`,
+  default 16; returns `503 Retry-After` when saturated). A panic in any layer is
+  recovered to a clean `500`. Backend error bodies are logged server-side (debug)
+  and never surfaced to the MCP caller. Image fetches/decodes are size- and
+  pixel-capped against decompression bombs.
 
 ```bash
 go test -race ./...        # unit tests (config, client retry, image, auth gate)

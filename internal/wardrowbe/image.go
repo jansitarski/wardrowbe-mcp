@@ -17,6 +17,14 @@ import (
 	xdraw "golang.org/x/image/draw"
 )
 
+// maxImageReadBytes caps how many bytes we buffer from an image response, and
+// maxImagePixels bounds the decoded pixel count so a small but highly compressed
+// image (a "decompression bomb") cannot expand into a multi-GB allocation.
+const (
+	maxImageReadBytes = 20 << 20   // 20 MiB on the wire
+	maxImagePixels    = 24_000_000 // ~24 MP decoded (e.g. 6000x4000)
+)
+
 // ImageData is a fetched garment photo ready to hand to the MCP layer.
 type ImageData struct {
 	ItemID string
@@ -110,12 +118,18 @@ func (c *Client) fetchImageBytes(ctx context.Context, imageURL string, authed bo
 		return nil, "", fmt.Errorf("fetch image: %w", err)
 	}
 	defer resp.Body.Close()
-	data, err := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		// Read only a small slice of an error body for diagnostics.
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		c.log.Debug("image fetch failed", "status", resp.StatusCode, "body", string(body))
+		return nil, "", &APIError{StatusCode: resp.StatusCode, Method: http.MethodGet, Path: "image", Body: string(body)}
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxImageReadBytes+1))
 	if err != nil {
 		return nil, "", fmt.Errorf("read image bytes: %w", err)
 	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, "", &APIError{StatusCode: resp.StatusCode, Method: http.MethodGet, Path: "image", Body: string(data)}
+	if len(data) > maxImageReadBytes {
+		return nil, "", fmt.Errorf("image exceeds %d MiB limit", maxImageReadBytes>>20)
 	}
 
 	mime := resp.Header.Get("Content-Type")
@@ -136,6 +150,17 @@ func downscale(data []byte, mime string, maxDim int) ([]byte, string) {
 	switch mime {
 	case "image/jpeg", "image/png":
 	default:
+		return data, mime
+	}
+
+	// Read dimensions cheaply first; refuse to fully decode a decompression bomb
+	// whose pixel count would blow up memory. Returning the original bytes is
+	// safe — they were already byte-size-capped upstream.
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return data, mime
+	}
+	if cfg.Width <= 0 || cfg.Height <= 0 || cfg.Width*cfg.Height > maxImagePixels {
 		return data, mime
 	}
 
