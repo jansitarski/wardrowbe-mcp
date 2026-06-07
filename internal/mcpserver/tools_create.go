@@ -31,7 +31,10 @@ func (s *Server) registerCreateTools() {
 			"image and uploads it to Wardrowbe (the backend then auto-tags it). Use this to add a "+
 			"garment from a product/photo link; afterwards refine attributes with get_item_image + "+
 			"set_item_tags/set_item_description. Note: only http(s) URLs to public hosts are allowed, "+
-			"and Claude cannot upload an image pasted into the chat — pass a URL."),
+			"and Claude cannot upload an image pasted into the chat — pass a URL. If the photo is only "+
+			"on local disk, either use create_item_from_base64, or upload it to a temporary public host "+
+			"such as litterbox.catbox.moe (POST reqtype=fileupload, time=1h, fileToUpload=@photo to "+
+			"https://litterbox.catbox.moe/resources/internals/api.php) and pass the returned 1-hour URL."),
 		mcp.WithString("image_url", mcp.Required(), mcp.Description("Public http(s) URL of the garment image.")),
 		mcp.WithString("name", mcp.Description("Optional item name.")),
 		mcp.WithString("type", mcp.Description("Optional item type (e.g. shirt, pants, jacket).")),
@@ -77,7 +80,9 @@ func (s *Server) handleCreateItemFromURL(ctx context.Context, req mcp.CallToolRe
 	if err != nil {
 		return mcp.NewToolResultErrorFromErr("create item failed", err), nil
 	}
-	s.log.Info("created item from url", "url", imageURL, "bytes", len(data), "mime", mime)
+	// Log only the host, not the full URL — retail/CDN URLs often carry signed
+	// tokens or tracking params we don't want in production logs.
+	s.log.Info("created item from url", "host", hostOnly(imageURL), "bytes", len(data), "mime", mime)
 	return jsonText(raw), nil
 }
 
@@ -140,7 +145,9 @@ func decodeBase64Image(raw string) ([]byte, string, error) {
 	// Tolerate whitespace/newlines that some clients insert into base64.
 	s = strings.Join(strings.Fields(s), "")
 
-	data, err := base64.StdEncoding.DecodeString(s)
+	// Tolerate the common base64 variants clients emit: standard and URL-safe
+	// alphabets, with or without padding.
+	data, err := decodeAnyBase64(s)
 	if err != nil {
 		return nil, "", fmt.Errorf("invalid base64: %w", err)
 	}
@@ -159,6 +166,31 @@ func decodeBase64Image(raw string) ([]byte, string, error) {
 		return nil, "", fmt.Errorf("decoded bytes are not an image (content-type %q)", mime)
 	}
 	return data, mime, nil
+}
+
+// decodeAnyBase64 decodes standard or URL-safe base64, padded or unpadded.
+func decodeAnyBase64(s string) ([]byte, error) {
+	encodings := []*base64.Encoding{
+		base64.StdEncoding, base64.RawStdEncoding,
+		base64.URLEncoding, base64.RawURLEncoding,
+	}
+	var lastErr error
+	for _, enc := range encodings {
+		if data, err := enc.DecodeString(s); err == nil {
+			return data, nil
+		} else {
+			lastErr = err
+		}
+	}
+	return nil, lastErr
+}
+
+// hostOnly returns just the host of a URL for safe logging (no path/query).
+func hostOnly(rawURL string) string {
+	if u, err := url.Parse(rawURL); err == nil && u.Host != "" {
+		return u.Host
+	}
+	return "unknown"
 }
 
 // fetchExternalImage downloads an image from a public URL with an SSRF guard

@@ -38,16 +38,18 @@ const (
 
 // Defaults mirror the Python server plus the new Go-only knobs.
 const (
-	defaultTransport    = string(TransportHTTP)
-	defaultHost         = "0.0.0.0"
-	defaultPort         = 8080
-	defaultWardrowbeURL = "http://127.0.0.1:8000"
-	defaultAuthMode     = string(AuthDev)
-	defaultExternalID   = "wardrowbe-mcp"
-	defaultLogLevel     = "INFO"
-	defaultImageMaxDim  = 768
-	defaultImageVariant = string(VariantMedium)
-	externalEmailSuffix = "@wardrowbe.local"
+	defaultTransport     = string(TransportHTTP)
+	defaultHost          = "0.0.0.0"
+	defaultPort          = 8080
+	defaultWardrowbeURL  = "http://127.0.0.1:8000"
+	defaultAuthMode      = string(AuthDev)
+	defaultExternalID    = "wardrowbe-mcp"
+	defaultLogLevel      = "INFO"
+	defaultImageMaxDim   = 768
+	defaultImageVariant  = string(VariantMedium)
+	externalEmailSuffix  = "@wardrowbe.local"
+	defaultMaxConcurrent = 16
+	defaultMaxBodyMB     = 40
 )
 
 // Config holds the fully-resolved runtime configuration.
@@ -73,6 +75,11 @@ type Config struct {
 	ImageMaxDim       int
 	ImageVariant      ImageVariant
 	PortalResourceURL string
+
+	// MaxConcurrent bounds in-flight /mcp requests (http transport); excess
+	// requests get 503. MaxBodyBytes caps the inbound /mcp request body.
+	MaxConcurrent int
+	MaxBodyBytes  int64
 }
 
 // Load resolves configuration from the given args (typically os.Args[1:]) and
@@ -102,6 +109,9 @@ func Load(args []string) (Config, error) {
 	imageVariant := fs.String("image-default-variant", envOr("MCP_IMAGE_VARIANT", defaultImageVariant), "default image variant: thumb/medium/full")
 	portalResourceURL := fs.String("portal-resource-url", envOr("MCP_PORTAL_RESOURCE_URL", ""), "OAuth protected-resource metadata URL for WWW-Authenticate")
 
+	maxConcurrent := fs.Int("max-concurrent", envOrInt("MCP_MAX_CONCURRENT", defaultMaxConcurrent), "max in-flight /mcp requests (http)")
+	maxBodyMB := fs.Int("max-body-mb", envOrInt("MCP_MAX_BODY_MB", defaultMaxBodyMB), "max inbound /mcp request body in MiB")
+
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
 	}
@@ -123,6 +133,8 @@ func Load(args []string) (Config, error) {
 		ImageMaxDim:       *imageMaxDim,
 		ImageVariant:      ImageVariant(strings.ToLower(*imageVariant)),
 		PortalResourceURL: *portalResourceURL,
+		MaxConcurrent:     *maxConcurrent,
+		MaxBodyBytes:      int64(*maxBodyMB) << 20,
 	}
 
 	if cfg.ExternalEmail == "" {
@@ -172,6 +184,12 @@ func (c Config) validate() error {
 	}
 	if c.ImageMaxDim <= 0 {
 		return fmt.Errorf("invalid --image-max-dim %d", c.ImageMaxDim)
+	}
+	if c.MaxConcurrent <= 0 {
+		return fmt.Errorf("invalid --max-concurrent %d (must be > 0)", c.MaxConcurrent)
+	}
+	if c.MaxBodyBytes <= 0 {
+		return fmt.Errorf("invalid --max-body-mb (must be > 0)")
 	}
 	return nil
 }

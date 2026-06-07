@@ -69,6 +69,9 @@ func TestDecodeBase64ImageRawAndDataURL(t *testing.T) {
 		"data url no mime": "data:;base64," + b64,
 		// Some clients wrap base64 in newlines — the decoder must tolerate it.
 		"whitespace": "  " + b64[:4] + "\n" + b64[4:] + "  ",
+		// Unpadded standard and URL-safe alphabets must also decode.
+		"raw std unpadded": strings.TrimRight(b64, "="),
+		"url safe":         base64.URLEncoding.EncodeToString(pngBytes),
 	}
 	for name, in := range cases {
 		t.Run(name, func(t *testing.T) {

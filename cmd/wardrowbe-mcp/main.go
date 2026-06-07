@@ -42,8 +42,16 @@ func run(args []string) error {
 	httpClient := &http.Client{
 		Timeout: 5 * time.Minute, // outfit suggestions can be slow (Ollama on CPU)
 		Transport: &http.Transport{
-			TLSHandshakeTimeout: 10 * time.Second,
-			IdleConnTimeout:     90 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			IdleConnTimeout:       90 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+			// All traffic targets one backend host; Go's default of 2 idle
+			// conns/host would defeat keep-alive under concurrency. Size the
+			// pool to the request concurrency cap and ceiling total conns so a
+			// stalled backend can't accumulate unbounded connections.
+			MaxIdleConns:        100,
+			MaxIdleConnsPerHost: cfg.MaxConcurrent,
+			MaxConnsPerHost:     cfg.MaxConcurrent * 2,
 		},
 	}
 	client := wardrowbe.NewClient(cfg.WardrowbeURL, provider, httpClient, logger)
@@ -68,6 +76,9 @@ func serveHTTP(cfg config.Config, srv *mcpserver.Server, logger *slog.Logger) er
 		Addr:              cfg.Addr(),
 		Handler:           srv.HTTPHandler(),
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       60 * time.Second,  // full inbound request (incl. base64 uploads)
+		WriteTimeout:      6 * time.Minute,   // > backend client timeout (slow Ollama)
+		IdleTimeout:       120 * time.Second, // keep-alive idle ceiling
 	}
 
 	errCh := make(chan error, 1)
