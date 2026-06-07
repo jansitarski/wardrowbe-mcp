@@ -67,9 +67,9 @@ To emit the RFC 9728 `WWW-Authenticate` header natively (retiring the Cloudflare
 Transform Rule), pass `--portal-resource-url`:
 
 ```bash
-  --portal-resource-url https://wardrowbe-portal.sitarski.tech/.well-known/oauth-protected-resource
+  --portal-resource-url https://<your-portal-host>/.well-known/oauth-protected-resource
 ```
 
 ## License
 
-TBD (upstream Wardrowbe MCP is MIT).
+[MIT](LICENSE).

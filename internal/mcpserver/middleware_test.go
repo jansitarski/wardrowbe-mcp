@@ -37,7 +37,7 @@ func TestRootProbeIsAnonymous(t *testing.T) {
 }
 
 func TestMCPWithoutBearerReturns401WithWWWAuthenticate(t *testing.T) {
-	portal := "https://wardrowbe-portal.sitarski.tech/.well-known/oauth-protected-resource"
+	portal := "https://portal.example.com/.well-known/oauth-protected-resource"
 	srv := testServer(t, portal)
 	rec := httptest.NewRecorder()
 	srv.HTTPHandler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/mcp", nil))
