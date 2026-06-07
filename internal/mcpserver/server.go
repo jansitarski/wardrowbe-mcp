@@ -14,7 +14,7 @@ import (
 
 const (
 	serverName    = "wardrowbe-mcp"
-	serverVersion = "0.2.3"
+	serverVersion = "0.2.4"
 )
 
 // Server bundles the runtime dependencies shared by every tool handler.
@@ -49,6 +49,7 @@ func (s *Server) registerTools() {
 	s.registerOutfitTools()    // suggest, get, recent, accept/reject/skip, feedback
 	s.registerImageTools()     // get_item_image, get_outfit_images
 	s.registerWritebackTools() // update_item, set_item_tags, set_item_description
+	s.registerCreateTools()    // create_item_from_url
 }
 
 // add registers a tool with its handler.
