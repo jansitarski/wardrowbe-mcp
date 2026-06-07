@@ -2,12 +2,18 @@ package mcpserver
 
 import (
 	"context"
+	"encoding/base64"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 )
+
+// pngBytes is a minimal byte slice whose PNG signature is enough for
+// http.DetectContentType to classify it as image/png.
+var pngBytes = []byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0}
 
 func TestIsPublicIP(t *testing.T) {
 	cases := map[string]bool{
@@ -51,6 +57,60 @@ func TestFetchExternalImageRejectsLoopbackOrNonImage(t *testing.T) {
 	// itself a correct failure (and also exercises that path).
 	if _, _, _, err := fetchExternalImage(context.Background(), srv.URL); err == nil {
 		t.Error("expected error fetching a loopback / non-image host")
+	}
+}
+
+func TestDecodeBase64ImageRawAndDataURL(t *testing.T) {
+	b64 := base64.StdEncoding.EncodeToString(pngBytes)
+
+	cases := map[string]string{
+		"raw":              b64,
+		"data url":         "data:image/png;base64," + b64,
+		"data url no mime": "data:;base64," + b64,
+		// Some clients wrap base64 in newlines — the decoder must tolerate it.
+		"whitespace": "  " + b64[:4] + "\n" + b64[4:] + "  ",
+	}
+	for name, in := range cases {
+		t.Run(name, func(t *testing.T) {
+			data, mime, err := decodeBase64Image(in)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if mime != "image/png" {
+				t.Errorf("mime = %q, want image/png", mime)
+			}
+			if len(data) != len(pngBytes) {
+				t.Errorf("len(data) = %d, want %d", len(data), len(pngBytes))
+			}
+		})
+	}
+}
+
+func TestDecodeBase64ImageRejectsBadInput(t *testing.T) {
+	notImage := base64.StdEncoding.EncodeToString([]byte("just some plain text, definitely not an image"))
+	cases := map[string]string{
+		"invalid base64":      "!!!not base64!!!",
+		"empty":               "",
+		"non-image bytes":     notImage,
+		"data url not base64": "data:image/png,raw",
+		"data url no comma":   "data:image/png;base64",
+	}
+	for name, in := range cases {
+		t.Run(name, func(t *testing.T) {
+			if _, _, err := decodeBase64Image(in); err == nil {
+				t.Errorf("expected error for %q", name)
+			}
+		})
+	}
+}
+
+func TestDecodeBase64ImageRejectsOversize(t *testing.T) {
+	big := make([]byte, 0, maxImageBytes+16)
+	big = append(big, pngBytes...)
+	big = append(big, make([]byte, maxImageBytes+1)...)
+	if _, _, err := decodeBase64Image(base64.StdEncoding.EncodeToString(big)); err == nil ||
+		!strings.Contains(err.Error(), "limit") {
+		t.Errorf("expected size-limit error, got %v", err)
 	}
 }
 
