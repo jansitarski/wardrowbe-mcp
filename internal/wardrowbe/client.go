@@ -8,10 +8,12 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	mimepkg "mime"
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
 	"net/url"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -22,6 +24,10 @@ const apiBase = "/api/v1"
 
 // refreshLeeway is subtracted from the token TTL so we re-sync before expiry.
 const refreshLeeway = 30 * time.Second
+
+// maxAPIResponseBytes caps how much of a backend JSON response we buffer, so a
+// misbehaving or compromised backend cannot exhaust memory.
+const maxAPIResponseBytes = 16 << 20 // 16 MiB
 
 // Token-cache bounds. The dev backend returns expires_in:null while the JWT
 // itself carries a multi-day exp; without these we would re-sync on every
@@ -34,7 +40,10 @@ const (
 	minTokenTTL = 60 * time.Second
 )
 
-// APIError represents a non-2xx backend response.
+// APIError represents a non-2xx backend response. Body holds the raw backend
+// response for server-side debug logging only; Error() deliberately omits it so
+// that backend-internal details (tokens, PII, stack traces) are never surfaced
+// to the MCP caller / LLM. Log Body at debug where the error is handled.
 type APIError struct {
 	StatusCode int
 	Method     string
@@ -43,11 +52,20 @@ type APIError struct {
 }
 
 func (e *APIError) Error() string {
-	body := e.Body
-	if len(body) > 300 {
-		body = body[:300] + "…"
+	return fmt.Sprintf("backend %s %s returned %d", e.Method, e.Path, e.StatusCode)
+}
+
+// readBoundedBody reads up to maxAPIResponseBytes from r, returning an error if
+// the limit is exceeded so an oversized response fails loudly instead of OOMing.
+func readBoundedBody(r io.Reader) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(r, maxAPIResponseBytes+1))
+	if err != nil {
+		return nil, err
 	}
-	return fmt.Sprintf("backend %s %s returned %d: %s", e.Method, e.Path, e.StatusCode, body)
+	if len(data) > maxAPIResponseBytes {
+		return nil, fmt.Errorf("response exceeds %d MiB limit", maxAPIResponseBytes>>20)
+	}
+	return data, nil
 }
 
 // Client is the authenticated Wardrowbe backend HTTP client. It mirrors the
@@ -122,8 +140,12 @@ func (c *Client) syncLocked(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("auth sync: %w", err)
 	}
 	defer resp.Body.Close()
-	raw, _ := io.ReadAll(resp.Body)
+	raw, err := readBoundedBody(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("auth sync: read body: %w", err)
+	}
 	if resp.StatusCode != http.StatusOK {
+		c.log.Debug("auth sync failed", "status", resp.StatusCode, "body", string(raw))
 		return "", &APIError{StatusCode: resp.StatusCode, Method: http.MethodPost, Path: "/auth/sync", Body: string(raw)}
 	}
 
@@ -205,6 +227,7 @@ func (c *Client) Request(ctx context.Context, method, path string, query url.Val
 		return nil, nil
 	}
 	if status < 200 || status >= 300 {
+		c.log.Debug("backend error", "method", method, "path", path, "status", status, "body", string(raw))
 		return nil, &APIError{StatusCode: status, Method: method, Path: path, Body: string(raw)}
 	}
 	return raw, nil
@@ -253,7 +276,7 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 		return nil, 0, fmt.Errorf("%s %s: %w", method, path, err)
 	}
 	defer resp.Body.Close()
-	raw, err := io.ReadAll(resp.Body)
+	raw, err := readBoundedBody(resp.Body)
 	if err != nil {
 		return nil, resp.StatusCode, fmt.Errorf("%s %s: read body: %w", method, path, err)
 	}
@@ -279,7 +302,10 @@ func (c *Client) CreateItemFromImage(ctx context.Context, data []byte, filename,
 	mw := multipart.NewWriter(&buf)
 
 	hdr := make(textproto.MIMEHeader)
-	hdr.Set("Content-Disposition", fmt.Sprintf(`form-data; name="image"; filename=%q`, filename))
+	hdr.Set("Content-Disposition", mimepkg.FormatMediaType("form-data", map[string]string{
+		"name":     "image",
+		"filename": sanitizeFilename(filename),
+	}))
 	hdr.Set("Content-Type", mime)
 	part, err := mw.CreatePart(hdr)
 	if err != nil {
@@ -303,6 +329,23 @@ func (c *Client) CreateItemFromImage(ctx context.Context, data []byte, filename,
 	return c.requestRaw(ctx, http.MethodPost, "/items", mw.FormDataContentType(), buf.Bytes())
 }
 
+// unsafeFilenameChars matches anything outside a conservative filename charset.
+var unsafeFilenameChars = regexp.MustCompile(`[^A-Za-z0-9._-]`)
+
+// sanitizeFilename reduces a (possibly user-supplied) filename to a safe charset
+// and bounded length, preventing header/MIME-parameter injection in the upload.
+func sanitizeFilename(name string) string {
+	name = unsafeFilenameChars.ReplaceAllString(strings.TrimSpace(name), "_")
+	name = strings.TrimLeft(name, ".") // no leading dots / hidden-file tricks
+	if name == "" {
+		return "upload"
+	}
+	if len(name) > 100 {
+		name = name[:100]
+	}
+	return name
+}
+
 // requestRaw is the raw-body sibling of Request: it sends a pre-encoded body
 // with an explicit Content-Type and applies the same 401-resync-once retry.
 func (c *Client) requestRaw(ctx context.Context, method, path, contentType string, body []byte) (json.RawMessage, error) {
@@ -321,6 +364,7 @@ func (c *Client) requestRaw(ctx context.Context, method, path, contentType strin
 		return nil, nil
 	}
 	if status < 200 || status >= 300 {
+		c.log.Debug("backend error", "method", method, "path", path, "status", status, "body", string(raw))
 		return nil, &APIError{StatusCode: status, Method: method, Path: path, Body: string(raw)}
 	}
 	return raw, nil
@@ -351,7 +395,7 @@ func (c *Client) doRaw(ctx context.Context, method, path, contentType string, bo
 		return nil, 0, fmt.Errorf("%s %s: %w", method, path, err)
 	}
 	defer resp.Body.Close()
-	raw, err := io.ReadAll(resp.Body)
+	raw, err := readBoundedBody(resp.Body)
 	if err != nil {
 		return nil, resp.StatusCode, fmt.Errorf("%s %s: read body: %w", method, path, err)
 	}
@@ -362,6 +406,13 @@ func (c *Client) doRaw(ctx context.Context, method, path, contentType string, bo
 // replies 204, so a nil body indicates success.
 func (c *Client) DeleteOutfit(ctx context.Context, outfitID string) (json.RawMessage, error) {
 	return c.Request(ctx, http.MethodDelete, "/outfits/"+url.PathEscape(outfitID), nil, nil)
+}
+
+// Ping checks backend reachability for readiness probes. It hits GET /health
+// and returns an error if the backend is unreachable or returns non-2xx.
+func (c *Client) Ping(ctx context.Context) error {
+	_, err := c.Request(ctx, http.MethodGet, "/health", nil, nil)
+	return err
 }
 
 // CoerceList normalizes a backend list response into a slice of raw messages.

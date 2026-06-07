@@ -14,7 +14,7 @@ import (
 
 const (
 	serverName    = "wardrowbe-mcp"
-	serverVersion = "0.2.5"
+	serverVersion = "0.3.0"
 )
 
 // Server bundles the runtime dependencies shared by every tool handler.
@@ -23,6 +23,8 @@ type Server struct {
 	client *wardrowbe.Client
 	log    *slog.Logger
 	mcp    *server.MCPServer
+	// sem bounds concurrent /mcp requests (buffered to cfg.MaxConcurrent).
+	sem chan struct{}
 }
 
 // New builds the MCP server and registers all tools.
@@ -34,7 +36,13 @@ func New(cfg config.Config, client *wardrowbe.Client, log *slog.Logger) *Server 
 		server.WithRecovery(),
 	)
 
-	s := &Server{cfg: cfg, client: client, log: log, mcp: mcpSrv}
+	s := &Server{
+		cfg:    cfg,
+		client: client,
+		log:    log,
+		mcp:    mcpSrv,
+		sem:    make(chan struct{}, cfg.MaxConcurrent),
+	}
 	s.registerTools()
 	return s
 }
