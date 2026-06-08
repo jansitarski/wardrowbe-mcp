@@ -12,6 +12,18 @@ import (
 	"time"
 )
 
+func TestCoerceListTreatsNullAsEmpty(t *testing.T) {
+	for _, in := range []string{"null", "  null ", ""} {
+		got, err := CoerceList([]byte(in))
+		if err != nil {
+			t.Errorf("CoerceList(%q) error: %v", in, err)
+		}
+		if len(got) != 0 {
+			t.Errorf("CoerceList(%q) = %d items, want 0", in, len(got))
+		}
+	}
+}
+
 func TestAPIErrorDoesNotLeakBody(t *testing.T) {
 	err := &APIError{
 		StatusCode: 400,
