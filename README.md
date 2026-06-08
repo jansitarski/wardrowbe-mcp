@@ -2,12 +2,16 @@
 
 A single static Go binary that exposes the
 [Wardrowbe](https://github.com/Anyesh/wardrowbe) wardrobe API as tools for Claude.
-Two capabilities make Claude a first-class part of the wardrobe:
+Three capabilities make Claude a first-class part of the wardrobe:
 
 - **Image view** — returns garment photos to Claude as MCP image content, so Claude's
   own vision tags and styles them instead of a small in-cluster model.
 - **Tag / description write-back** — lets Claude save accurate attributes back to
   Wardrowbe, so it can correct what the auto-tagger got wrong.
+- **Item creation** — lets Claude add a garment from an image: `create_item_from_url`
+  fetches a public image URL (SSRF-guarded), and `create_item_from_base64` takes an
+  inline image for local files. The backend stores and auto-tags it; Claude can then
+  refine the tags via write-back.
 
 It runs over Streamable HTTP (or stdio) and is designed to sit in a homelab k3s
 cluster behind a Cloudflare Access MCP portal, used from Claude Desktop, Mobile, or
