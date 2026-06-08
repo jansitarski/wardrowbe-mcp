@@ -82,7 +82,7 @@ func (s *Server) handleOutfitImages(ctx context.Context, req mcp.CallToolRequest
 		img, err := s.client.ItemImageFromPayload(ctx, itemID, g, variant, s.cfg.ImageMaxDim)
 		entry := map[string]any{"item_id": itemID}
 		if err != nil {
-			entry["error"] = err.Error()
+			entry["error"] = safeErrText(err)
 			manifest = append(manifest, entry)
 			s.log.Warn("outfit image fetch failed", "item_id", itemID, "err", err)
 			continue
@@ -91,6 +91,12 @@ func (s *Server) handleOutfitImages(ctx context.Context, req mcp.CallToolRequest
 		entry["bytes"] = len(img.Data)
 		manifest = append(manifest, entry)
 		content = append(content, mcp.NewImageContent(base64.StdEncoding.EncodeToString(img.Data), img.MIME))
+	}
+
+	if len(content) == 0 {
+		// Every garment image failed — surface it as an error, not a "success"
+		// with an all-errors manifest the model would misread as a partial result.
+		return mcp.NewToolResultError("could not fetch any garment images for this outfit"), nil
 	}
 
 	header, _ := json.Marshal(map[string]any{

@@ -3,9 +3,11 @@ package mcpserver
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/jansitarski/wardrowbe-mcp/internal/wardrowbe"
 )
@@ -21,6 +23,25 @@ func clampInt(v, lo, hi int) int {
 }
 
 func itoa(v int) string { return strconv.Itoa(v) }
+
+// isValidDate reports whether s is a calendar date in YYYY-MM-DD form. Validating
+// at the gateway turns a vague backend 422 into a clear tool-level message.
+func isValidDate(s string) bool {
+	_, err := time.Parse("2006-01-02", s)
+	return err == nil
+}
+
+// safeErrText renders an error for return to the MCP caller without leaking
+// backend internals. An *APIError already reports only method/path/status; any
+// other error (network, TLS, DNS — which embed internal hostnames/IPs) is
+// reduced to a generic message. Log the full error server-side separately.
+func safeErrText(err error) string {
+	var apiErr *wardrowbe.APIError
+	if errors.As(err, &apiErr) {
+		return apiErr.Error()
+	}
+	return "request failed"
+}
 
 // firstOutfitID fetches the outfit list and returns the id of the first
 // (latest) outfit, or an error if there are none.
@@ -48,7 +69,7 @@ func (s *Server) firstOutfitID(ctx context.Context) (string, error) {
 	return first.ID, nil
 }
 
-// validOccasions / validTimesOfDay mirror upstream server.py enums (spec §5).
+// validOccasions / validTimesOfDay mirror the upstream server.py enums.
 var validOccasions = map[string]struct{}{
 	"beach": {}, "brunch": {}, "business-casual": {}, "casual": {}, "date": {},
 	"dinner": {}, "formal": {}, "gym": {}, "hiking": {}, "interview": {},

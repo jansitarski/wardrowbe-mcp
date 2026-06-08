@@ -112,6 +112,9 @@ func (s *Server) handleLogWear(ctx context.Context, req mcp.CallToolRequest) (*m
 	}
 	var body any
 	if date := req.GetString("date", ""); date != "" {
+		if !isValidDate(date) {
+			return mcp.NewToolResultError("date must be YYYY-MM-DD"), nil
+		}
 		body = map[string]string{"date": date}
 	}
 	return s.itemAction(ctx, itemID, "wear", body)
