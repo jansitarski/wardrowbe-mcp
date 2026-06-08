@@ -39,6 +39,13 @@ tagged `X.Y.Z`, `X.Y`, and `latest`, and cuts a GitHub Release with
 auto-generated notes. The tag version is baked into the binary via `-ldflags`,
 so `wardrowbe-mcp --help`/the MCP handshake report the real version.
 
+The same workflow packages the [Helm chart](charts/wardrowbe-mcp/) with the tag
+as both chart and app version and pushes it to
+`oci://ghcr.io/jansitarski/charts/wardrowbe-mcp`, so the chart version always
+maps to an image that exists. CI runs `helm lint` + `helm template` on every PR;
+bump `charts/wardrowbe-mcp/Chart.yaml` when the chart's templates change
+independently of the app.
+
 ```bash
 # 1. bump the default in internal/mcpserver/server.go only if you want a sane
 #    `dev` fallback; the published version comes from the tag, not the source.
