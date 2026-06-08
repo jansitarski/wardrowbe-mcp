@@ -1,5 +1,5 @@
 // Package config parses the wardrowbe-mcp configuration surface from flags and
-// environment variables. Flags take precedence over env vars (spec §3).
+// environment variables. Flags take precedence over env vars.
 package config
 
 import (
