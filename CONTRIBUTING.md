@@ -30,6 +30,24 @@ pull request. Please make sure all four pass locally before opening a PR.
   `server.go`; mark read-only tools with `WithReadOnlyHintAnnotation(true)` and
   destructive ones with `WithDestructiveHintAnnotation(true)`.
 
+## Releases
+
+Releases are cut by pushing a `vX.Y.Z` git tag. The
+[`release` workflow](.github/workflows/release.yml) then builds a multi-arch
+(`amd64` + `arm64`) image, pushes it to `ghcr.io/jansitarski/wardrowbe-mcp`
+tagged `X.Y.Z`, `X.Y`, and `latest`, and cuts a GitHub Release with
+auto-generated notes. The tag version is baked into the binary via `-ldflags`,
+so `wardrowbe-mcp --help`/the MCP handshake report the real version.
+
+```bash
+# 1. bump the default in internal/mcpserver/server.go only if you want a sane
+#    `dev` fallback; the published version comes from the tag, not the source.
+# 2. tag the release commit on master and push the tag:
+git tag v0.3.0
+git push origin v0.3.0
+# 3. bump the image tag in the k8s-homelab deployment to match.
+```
+
 ## Reporting security issues
 
 Please do not file public issues for vulnerabilities — see
