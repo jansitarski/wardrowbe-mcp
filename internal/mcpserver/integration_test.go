@@ -300,6 +300,9 @@ func TestCreateItemFromURL(t *testing.T) {
 	backend := mockBackend(t)
 	c := newTestClient(t, backend.URL)
 
+	// Swaps the package-level imageFetchTransport. Tests in this package must run
+	// sequentially (do NOT add t.Parallel here or in tests sharing this var) — the
+	// -race CI step would otherwise flag the unsynchronized read/write.
 	orig := imageFetchTransport
 	imageFetchTransport = func() *http.Transport { return &http.Transport{} }
 	t.Cleanup(func() { imageFetchTransport = orig })
