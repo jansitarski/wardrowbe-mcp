@@ -12,10 +12,13 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 )
 
-const (
-	serverName    = "wardrowbe-mcp"
-	serverVersion = "0.3.0"
-)
+const serverName = "wardrowbe-mcp"
+
+// serverVersion is the build version reported to MCP clients. It is overridden
+// at build time via -ldflags
+// "-X github.com/jansitarski/wardrowbe-mcp/internal/mcpserver.serverVersion=<v>"
+// (see the Dockerfile and Makefile); unbuilt/dev builds report "dev".
+var serverVersion = "dev"
 
 // Server bundles the runtime dependencies shared by every tool handler.
 type Server struct {

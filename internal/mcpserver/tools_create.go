@@ -205,7 +205,7 @@ func fetchExternalImage(ctx context.Context, rawURL string) ([]byte, string, str
 		return nil, "", "", fmt.Errorf("only http(s) urls are allowed (got %q)", u.Scheme)
 	}
 
-	client := &http.Client{Timeout: imageFetchTimeout, Transport: ssrfTransport()}
+	client := &http.Client{Timeout: imageFetchTimeout, Transport: imageFetchTransport()}
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
 		return nil, "", "", err
@@ -248,6 +248,13 @@ func fetchExternalImage(ctx context.Context, rawURL string) ([]byte, string, str
 
 	return data, mime, filenameFor(u, mime), nil
 }
+
+// imageFetchTransport builds the HTTP transport used for external image fetches.
+// Production always uses the SSRF-guarded transport (ssrfTransport); it is a
+// package-private var solely so the in-package integration test can fetch from a
+// loopback test server. Overriding it requires in-package code, so it is not a
+// runtime attack surface.
+var imageFetchTransport = ssrfTransport
 
 // ssrfTransport returns an http transport whose dialer refuses to connect to
 // private, loopback, link-local or unspecified addresses — checked on the IP

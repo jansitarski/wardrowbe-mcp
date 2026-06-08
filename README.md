@@ -44,6 +44,18 @@ error bodies are logged server-side only — never surfaced to the caller. Wire 
 
 ## Quick start
 
+Pull a pinned, prebuilt image (multi-arch, distroless, non-root):
+
+```bash
+docker run --rm -p 8080:8080 -e MCP_API_KEY="$MCP_API_KEY" \
+  ghcr.io/jansitarski/wardrowbe-mcp:0.3.0 \
+  --transport http --host 0.0.0.0 --port 8080 \
+  --wardrowbe-url http://backend.wardrowbe.svc.cluster.local:8000 \
+  --auth dev --external-id <web-user-external-id> --external-email <real-email>
+```
+
+Or build from source:
+
 ```bash
 go build -o wardrowbe-mcp ./cmd/wardrowbe-mcp
 
@@ -53,6 +65,20 @@ go build -o wardrowbe-mcp ./cmd/wardrowbe-mcp
   --auth dev --external-id <web-user-external-id> --external-email <real-email> \
   --api-key "$MCP_API_KEY"
 ```
+
+Or deploy to Kubernetes with the Helm chart (published as an OCI artifact per
+release):
+
+```bash
+helm install wardrowbe-mcp \
+  oci://ghcr.io/jansitarski/charts/wardrowbe-mcp --version 0.3.0 \
+  -n wardrowbe --create-namespace \
+  --set config.wardrowbeUrl=http://backend.wardrowbe.svc.cluster.local:8000 \
+  --set apiKey.value="$MCP_API_KEY"
+```
+
+See [`charts/wardrowbe-mcp/`](charts/wardrowbe-mcp/README.md) for all values and a
+Flux `HelmRelease` example.
 
 Connect from Claude Code:
 
@@ -99,6 +125,8 @@ Contributions: see [CONTRIBUTING.md](CONTRIBUTING.md). Security reports:
 - [`docs/connecting-claude-via-cloudflare.md`](docs/connecting-claude-via-cloudflare.md)
   — exposing `/mcp` to Claude's native connectors through a Cloudflare tunnel + Access
   MCP portal: the required configuration and the client options.
+- [`charts/wardrowbe-mcp/`](charts/wardrowbe-mcp/README.md) — the Helm chart:
+  installable values, the API-key options, and a Flux `HelmRelease` example.
 - [`skills/wardrowbe-image-upload/`](skills/wardrowbe-image-upload/SKILL.md) — a Claude
   Code skill for bulk-importing garment photos and giving them accurate tags with
   Claude's own vision instead of the backend's auto-tagger.

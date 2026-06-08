@@ -1,0 +1,24 @@
+wardrowbe-mcp {{ .Chart.AppVersion }} is installed as release "{{ .Release.Name }}".
+
+In-cluster MCP endpoint:
+  http://{{ include "wardrowbe-mcp.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.port }}/mcp
+
+Port-forward to try it locally:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "wardrowbe-mcp.fullname" . }} {{ .Values.service.port }}:{{ .Values.service.port }}
+
+Connect from Claude Code (replace <api-key> with the bearer you configured):
+  claude mcp add --transport http wardrowbe \
+    http://localhost:{{ .Values.service.port }}/mcp \
+    --header "Authorization: Bearer <api-key>"
+
+{{- if not .Values.config.wardrowbeUrl }}
+
+WARNING: config.wardrowbeUrl is empty. Set it to your Wardrowbe backend base URL
+(no /api/v1), e.g. --set config.wardrowbeUrl=http://backend.wardrowbe.svc.cluster.local:8000
+{{- end }}
+{{- if and (not .Values.apiKey.existingSecret) (not .Values.apiKey.value) }}
+
+WARNING: no API key configured. The http transport requires one. Either set
+apiKey.value (the chart creates a Secret) or point apiKey.existingSecret at a
+Secret with key "{{ .Values.apiKey.key }}".
+{{- end }}
