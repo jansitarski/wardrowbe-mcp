@@ -1,73 +1,48 @@
 # wardrowbe-mcp (Go)
 
-A Go reimplementation of the [Wardrowbe](https://github.com/Anyesh/wardrowbe) MCP
-server (originally [`saya6k/mcp-wardrowbe`](https://github.com/saya6k/mcp-wardrowbe),
-Python/FastMCP), with **feature parity** plus two new capabilities:
+A single static Go binary that exposes the
+[Wardrowbe](https://github.com/Anyesh/wardrowbe) wardrobe API as tools for Claude.
+Two capabilities make Claude a first-class part of the wardrobe:
 
-1. **Image view** — return garment photos to Claude as MCP image content, so Claude's
-   own vision does analysis/styling instead of a small in-cluster vision model.
-2. **Tag / description write-back** — let Claude save accurate attributes back to
-   Wardrowbe (`PATCH /items/{id}`).
+- **Image view** — returns garment photos to Claude as MCP image content, so Claude's
+  own vision tags and styles them instead of a small in-cluster model.
+- **Tag / description write-back** — lets Claude save accurate attributes back to
+  Wardrowbe, so it can correct what the auto-tagger got wrong.
 
-It exposes the Wardrowbe wardrobe API as MCP tools over Streamable HTTP, intended to
-run in a homelab k3s cluster behind a Cloudflare Access MCP portal and used from
-Claude (Desktop / Mobile / Code).
+It runs over Streamable HTTP (or stdio) and is designed to sit in a homelab k3s
+cluster behind a Cloudflare Access MCP portal, used from Claude Desktop, Mobile, or
+Code. Current version: **0.3.0**.
 
-## Status
+## Tools
 
-Implemented (v0.3.0). Single static Go binary exposing **31 MCP tools** (22 parity
-+ `get_item_image`, `get_outfit_images`, `update_item`, `set_item_tags`,
-`set_item_description`, `create_outfit` — compose an outfit from chosen item ids via
-`POST /outfits/studio` — `delete_outfit` to remove any outfit by id,
-`create_item_from_url` — add a garment from a public image URL, SSRF-guarded, which
-the server uploads to `POST /items` for backend auto-tagging — and
-`create_item_from_base64` — add a garment from an inline base64 image (raw or data
-URL) for when the photo is local and has no public URL) over Streamable HTTP
-and stdio. `go test -race ./...` green.
+31 tools covering the wardrobe API: browsing and analytics (`list_items`, `get_item`,
+`get_wardrobe_summary`, …), wear/wash/archive lifecycle, outfit suggestion and
+feedback, the image-view tools (`get_item_image`, `get_outfit_images`), write-back
+(`update_item`, `set_item_tags`, `set_item_description`), and creation
+(`create_outfit`, `create_item_from_url`, `create_item_from_base64`, `delete_outfit`).
 
-### HTTP endpoints & production hardening (v0.3.0)
+Each tool maps to a Wardrowbe backend endpoint; the definitions live in
+`internal/mcpserver/tools_*.go`.
 
-- `GET /` — **liveness** (static; process is up, no backend dependency).
-- `GET /readyz` — **readiness** (pings the backend within 3s; `503` when it's down).
-  Wire k8s `readinessProbe` here and `livenessProbe` to `/`.
-- `POST /mcp` — bearer-gated MCP endpoint, wrapped with an inbound body-size cap
-  (`--max-body-mb`, default 40) and a concurrency limiter (`--max-concurrent`,
-  default 16; returns `503 Retry-After` when saturated). A panic in any layer is
-  recovered to a clean `500`. Backend error bodies are logged server-side (debug)
-  and never surfaced to the MCP caller. Image fetches/decodes are size- and
-  pixel-capped against decompression bombs.
+## HTTP endpoints
 
-```bash
-go test -race ./...        # unit tests (config, client retry, image, auth gate)
-go build ./cmd/wardrowbe-mcp
-docker build -t wardrowbe-mcp .
-```
+| Endpoint | Auth | Purpose |
+|---|---|---|
+| `GET /` | none | Liveness — static `200`, no backend dependency. |
+| `GET /readyz` | none | Readiness — pings the backend (3s); `503` when it's down. |
+| `POST /mcp` | Bearer | The MCP endpoint (Streamable HTTP). |
 
-## Docs
+`/mcp` is hardened for public exposure: a static bearer gate (constant-time, emits
+RFC 9728 `WWW-Authenticate` on `401`), an inbound body-size cap, a concurrency
+limiter that returns `503 Retry-After` when saturated, and panic recovery. Backend
+error bodies are logged server-side only — never surfaced to the caller. Wire a k8s
+`readinessProbe` to `/readyz` and `livenessProbe` to `/`.
 
-- [`docs/go-rewrite-spec.md`](docs/go-rewrite-spec.md) — the implementation spec:
-  config surface, the 22 parity tools → backend endpoints, the new image + write-back
-  tools, auth model, Dockerfile, deployment, and a rollout/parity checklist.
-- [`docs/context.md`](docs/context.md) — background from the homelab bring-up: the
-  deployment topology, the Cloudflare Access/OAuth setup and its gotchas, the vision-model
-  evaluation, the identity/`external_id` model, the backend API surface, and the bugs
-  this rewrite is meant to fix.
-
-## Why a rewrite
-
-Beyond a smaller single-binary image, the Go version fixes three issues found while
-running the Python server in production (see `docs/context.md`):
-
-1. `health` probes the wrong path (`/health` 404s; should be `/api/v1/health`).
-2. The 401 on `/mcp` omits `WWW-Authenticate`, which Claude's connector needs to
-   discover OAuth (worked around today with a Cloudflare Transform Rule).
-3. The dev `/auth/sync` derives `<external-id>@wardrowbe.local` as the email, causing
-   the account email to flap; a new `--external-email` flag fixes it.
-
-## Quick start (planned)
+## Quick start
 
 ```bash
 go build -o wardrowbe-mcp ./cmd/wardrowbe-mcp
+
 ./wardrowbe-mcp \
   --transport http --host 0.0.0.0 --port 8080 \
   --wardrowbe-url http://backend.wardrowbe.svc.cluster.local:8000 \
@@ -75,12 +50,59 @@ go build -o wardrowbe-mcp ./cmd/wardrowbe-mcp
   --api-key "$MCP_API_KEY"
 ```
 
-To emit the RFC 9728 `WWW-Authenticate` header natively (retiring the Cloudflare
-Transform Rule), pass `--portal-resource-url`:
+Connect from Claude Code:
 
 ```bash
-  --portal-resource-url https://<your-portal-host>/.well-known/oauth-protected-resource
+claude mcp add --transport http wardrowbe <url> --header "Authorization: Bearer $MCP_API_KEY"
 ```
+
+## Configuration
+
+Every flag has a matching `MCP_*` (or `WARDROWBE_URL`) environment variable; flags win.
+The most-used ones:
+
+| Flag | Default | Purpose |
+|---|---|---|
+| `--transport` | `http` | `http` (Streamable) or `stdio`. |
+| `--wardrowbe-url` | — | Backend base URL (no `/api/v1`). |
+| `--api-key` | — | Incoming bearer key; **required for http**. |
+| `--auth` | `dev` | `dev` or `oidc`. |
+| `--external-id` / `--external-email` | — | Dev identity sent to `/auth/sync`. |
+| `--max-concurrent` | `16` | In-flight `/mcp` request cap. |
+| `--max-body-mb` | `40` | Inbound `/mcp` body cap. |
+| `--portal-resource-url` | — | Emits the RFC 9728 `resource_metadata` on `401`. |
+
+Run `wardrowbe-mcp --help` for the complete flag list, including the image and OIDC
+options.
+
+## Development
+
+```bash
+make build   # static binary
+make test    # go test -race ./...
+make vet
+make docker  # distroless, non-root image
+```
+
+Contributions: see [CONTRIBUTING.md](CONTRIBUTING.md). Security reports:
+[docs/SECURITY.md](docs/SECURITY.md).
+
+## Documentation
+
+- [`docs/deployment.md`](docs/deployment.md) — running the server against a Wardrowbe
+  backend: reference topology, backend dev auth, identity (`--external-id` /
+  `--external-email`), the AI backend, and connecting Claude.
+- [`docs/connecting-claude-via-cloudflare.md`](docs/connecting-claude-via-cloudflare.md)
+  — exposing `/mcp` to Claude's native connectors through a Cloudflare tunnel + Access
+  MCP portal: the required configuration and the client options.
+- [`skills/wardrowbe-image-upload/`](skills/wardrowbe-image-upload/SKILL.md) — a Claude
+  Code skill for bulk-importing garment photos and giving them accurate tags with
+  Claude's own vision instead of the backend's auto-tagger.
+
+## Credits
+
+Derived from [saya6k/mcp-wardrowbe](https://github.com/saya6k/mcp-wardrowbe) (MIT),
+reimplemented in Go.
 
 ## License
 

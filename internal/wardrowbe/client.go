@@ -137,7 +137,8 @@ func (c *Client) syncLocked(ctx context.Context) (string, error) {
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("auth sync: %w", err)
+		c.log.Debug("auth sync request failed", "err", err)
+		return "", fmt.Errorf("auth sync: request failed")
 	}
 	defer resp.Body.Close()
 	raw, err := readBoundedBody(resp.Body)
@@ -273,7 +274,10 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, 0, fmt.Errorf("%s %s: %w", method, path, err)
+		// Don't surface raw transport errors (they embed internal hostnames/IPs)
+		// to the MCP caller; log them and return a generic message.
+		c.log.Debug("backend request failed", "method", method, "path", path, "err", err)
+		return nil, 0, fmt.Errorf("backend %s %s: request failed", method, path)
 	}
 	defer resp.Body.Close()
 	raw, err := readBoundedBody(resp.Body)
@@ -392,7 +396,10 @@ func (c *Client) doRaw(ctx context.Context, method, path, contentType string, bo
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, 0, fmt.Errorf("%s %s: %w", method, path, err)
+		// Don't surface raw transport errors (they embed internal hostnames/IPs)
+		// to the MCP caller; log them and return a generic message.
+		c.log.Debug("backend request failed", "method", method, "path", path, "err", err)
+		return nil, 0, fmt.Errorf("backend %s %s: request failed", method, path)
 	}
 	defer resp.Body.Close()
 	raw, err := readBoundedBody(resp.Body)
@@ -420,7 +427,9 @@ func (c *Client) Ping(ctx context.Context) error {
 // keys (items/results/data/outfits/notifications).
 func CoerceList(raw json.RawMessage) ([]json.RawMessage, error) {
 	trimmed := bytes.TrimSpace(raw)
-	if len(trimmed) == 0 {
+	if len(trimmed) == 0 || string(trimmed) == "null" {
+		// An empty body or JSON null (FastAPI often returns null for an empty
+		// collection) is an empty list, not an error.
 		return nil, nil
 	}
 	if trimmed[0] == '[' {
