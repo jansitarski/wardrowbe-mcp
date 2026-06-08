@@ -12,6 +12,11 @@ wardrowbe-mcp sits in front of a Wardrowbe deployment — Postgres + Redis + a F
 backend + an arq worker + a Next.js frontend — and exposes the backend API to Claude
 as MCP tools. Run one MCP server per backend; Claude connects to it.
 
+Claude can also **add items** through the server: `create_item_from_url` fetches a
+public image URL and `create_item_from_base64` takes an inline image, both uploading
+to the backend (which stores and auto-tags the garment) — so a wardrobe can be built
+or extended directly from chat, not just the web UI.
+
 Wardrowbe requires an AI backend for garment auto-tagging and outfit suggestions.
 Any OpenAI-compatible endpoint works, and a small local model (e.g. Ollama) is enough:
 the server's image-view and write-back tools let Claude do the accurate tagging
