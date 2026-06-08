@@ -128,6 +128,11 @@ func (s *Server) handleCreateOutfit(ctx context.Context, req mcp.CallToolRequest
 	if len(itemIDs) > maxOutfitItems {
 		return mcp.NewToolResultErrorf("too many items: %d (max %d)", len(itemIDs), maxOutfitItems), nil
 	}
+	for _, id := range itemIDs {
+		if strings.TrimSpace(id) == "" {
+			return mcp.NewToolResultError("item_ids must not contain empty values"), nil
+		}
+	}
 
 	occasion, err := req.RequireString("occasion")
 	if err != nil || occasion == "" {

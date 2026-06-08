@@ -331,6 +331,7 @@ func TestToolGuards(t *testing.T) {
 		{"create_item_from_url", map[string]any{"image_url": "http://127.0.0.1:1/x.png"}, "non-public"},
 		{"create_item_from_url", map[string]any{"image_url": "file:///etc/passwd"}, "http(s)"},
 		{"suggest_outfit", map[string]any{"occasion": "spacewalk"}, "invalid occasion"},
+		{"create_outfit", map[string]any{"item_ids": []any{"item-1", ""}, "occasion": "casual"}, "empty values"},
 		{"log_wear", map[string]any{"item_id": "item-1", "date": "06-2026"}, "YYYY-MM-DD"},
 		{"get_item", map[string]any{}, "item_id is required"},
 		{"create_item_from_base64", map[string]any{"image_base64": base64.StdEncoding.EncodeToString([]byte("not-an-image"))}, "not an image"},
