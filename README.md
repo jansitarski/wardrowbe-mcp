@@ -44,6 +44,18 @@ error bodies are logged server-side only — never surfaced to the caller. Wire 
 
 ## Quick start
 
+Pull a pinned, prebuilt image (multi-arch, distroless, non-root):
+
+```bash
+docker run --rm -p 8080:8080 -e MCP_API_KEY="$MCP_API_KEY" \
+  ghcr.io/jansitarski/wardrowbe-mcp:0.3.0 \
+  --transport http --host 0.0.0.0 --port 8080 \
+  --wardrowbe-url http://backend.wardrowbe.svc.cluster.local:8000 \
+  --auth dev --external-id <web-user-external-id> --external-email <real-email>
+```
+
+Or build from source:
+
 ```bash
 go build -o wardrowbe-mcp ./cmd/wardrowbe-mcp
 

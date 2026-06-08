@@ -1,12 +1,13 @@
 BINARY := wardrowbe-mcp
 PKG := ./cmd/wardrowbe-mcp
-IMAGE ?= ghcr.io/jansitarski/wardrowbe-mcp-go
+IMAGE ?= ghcr.io/jansitarski/wardrowbe-mcp
 VERSION ?= dev
+LDFLAGS := -s -w -X 'github.com/jansitarski/wardrowbe-mcp/internal/mcpserver.serverVersion=$(VERSION)'
 
 .PHONY: build test vet fmt lint run docker clean
 
 build:
-	CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o $(BINARY) $(PKG)
+	CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o $(BINARY) $(PKG)
 
 test:
 	go test -race ./...
@@ -25,7 +26,7 @@ run: build
 		--wardrowbe-url $(WARDROWBE_URL) --api-key $(MCP_API_KEY)
 
 docker:
-	docker build -t $(IMAGE):$(VERSION) .
+	docker build --build-arg VERSION=$(VERSION) -t $(IMAGE):$(VERSION) .
 
 clean:
 	rm -f $(BINARY)
