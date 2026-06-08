@@ -98,9 +98,12 @@ func (o OIDCTokenProvider) SyncPayload(ctx context.Context) (SyncPayload, error)
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxAPIResponseBytes+1))
+	if err != nil {
+		return SyncPayload{}, fmt.Errorf("oidc: read token response: %w", err)
+	}
 	if resp.StatusCode != http.StatusOK {
-		return SyncPayload{}, fmt.Errorf("oidc: token endpoint returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return SyncPayload{}, fmt.Errorf("oidc: token endpoint returned %d", resp.StatusCode)
 	}
 
 	var tok oidcTokenResponse
@@ -108,7 +111,7 @@ func (o OIDCTokenProvider) SyncPayload(ctx context.Context) (SyncPayload, error)
 		return SyncPayload{}, fmt.Errorf("oidc: decode token response: %w", err)
 	}
 	if tok.Error != "" {
-		return SyncPayload{}, fmt.Errorf("oidc: token error %s: %s", tok.Error, tok.ErrDesc)
+		return SyncPayload{}, fmt.Errorf("oidc: token error %s", tok.Error)
 	}
 	if tok.IDToken == "" {
 		return SyncPayload{}, fmt.Errorf("oidc: token response missing id_token")
@@ -139,7 +142,7 @@ func (o OIDCTokenProvider) discoverTokenEndpoint(ctx context.Context) (string, e
 		return "", fmt.Errorf("oidc: discovery returned %d", resp.StatusCode)
 	}
 	var disc oidcDiscovery
-	if err := json.NewDecoder(resp.Body).Decode(&disc); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&disc); err != nil {
 		return "", fmt.Errorf("oidc: decode discovery: %w", err)
 	}
 	if disc.TokenEndpoint == "" {

@@ -46,7 +46,7 @@ type ItemTags struct {
 // must mirror StudioCreateRequest exactly).
 type StudioOutfit struct {
 	Items        []string `json:"items"`    // 1-20 item ids
-	Occasion     string   `json:"occasion"` // free text, <= 50 chars
+	Occasion     string   `json:"occasion"` // validated against the occasion enum (see helpers.go)
 	Name         *string  `json:"name,omitempty"`
 	ScheduledFor *string  `json:"scheduled_for,omitempty"` // YYYY-MM-DD
 	MarkWorn     bool     `json:"mark_worn"`

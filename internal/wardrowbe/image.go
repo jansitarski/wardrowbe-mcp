@@ -115,7 +115,8 @@ func (c *Client) fetchImageBytes(ctx context.Context, imageURL string, authed bo
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, "", fmt.Errorf("fetch image: %w", err)
+		c.log.Debug("image fetch request failed", "err", err)
+		return nil, "", fmt.Errorf("fetch image: request failed")
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {

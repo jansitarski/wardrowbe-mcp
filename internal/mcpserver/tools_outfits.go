@@ -99,6 +99,9 @@ func (s *Server) handleSuggestOutfit(ctx context.Context, req mcp.CallToolReques
 		body["time_of_day"] = tod
 	}
 	if d := req.GetString("target_date", ""); d != "" {
+		if !isValidDate(d) {
+			return mcp.NewToolResultError("target_date must be YYYY-MM-DD"), nil
+		}
 		body["target_date"] = d
 	}
 	if notes := req.GetString("notes", ""); notes != "" {
@@ -147,6 +150,9 @@ func (s *Server) handleCreateOutfit(ctx context.Context, req mcp.CallToolRequest
 		outfit.Name = &name
 	}
 	if d := req.GetString("scheduled_for", ""); d != "" {
+		if !isValidDate(d) {
+			return mcp.NewToolResultError("scheduled_for must be YYYY-MM-DD"), nil
+		}
 		outfit.ScheduledFor = &d
 	}
 	if sid := req.GetString("source_item_id", ""); sid != "" {
@@ -241,6 +247,9 @@ func (s *Server) handleOutfitFeedback(ctx context.Context, req mcp.CallToolReque
 	}
 	if notes := req.GetString("notes", ""); notes != "" {
 		body["notes"] = notes
+	}
+	if len(body) == 0 {
+		return mcp.NewToolResultError("provide at least one of: rating, wore, notes"), nil
 	}
 
 	path := "/outfits/" + url.PathEscape(outfitID) + "/feedback"
