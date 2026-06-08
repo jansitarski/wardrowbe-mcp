@@ -18,6 +18,21 @@ make lint    # vet + gofmt -l (lists unformatted files)
 CI runs `gofmt -l`, `go vet`, `go build`, and `go test -race` on every push and
 pull request. Please make sure all four pass locally before opening a PR.
 
+### Integration test
+
+`internal/mcpserver/integration_test.go` (build tag `integration`) drives **every
+registered tool** through the real MCP protocol — an in-process client against a
+faithful in-memory backend — and asserts each happy path returns a non-error
+result and that the SSRF/validation guards reject bad input. It is hermetic (no
+subprocess, no outbound network) and CI runs it as a separate step:
+
+```bash
+go test -tags integration -race ./internal/mcpserver/
+```
+
+When you add or rename a tool, update the cases in that file and bump
+`expectedToolCount`.
+
 ## Guidelines
 
 - **Format with `gofmt`** — CI fails on unformatted files.
