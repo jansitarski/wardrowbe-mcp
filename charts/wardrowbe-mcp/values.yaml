@@ -66,8 +66,12 @@ resources:
     cpu: 500m
 
 # The distroless image runs as a non-root user; these lock the runtime down.
+# runAsUser/runAsGroup must be numeric: the image's `USER nonroot` is a name, and
+# with only runAsNonRoot the kubelet cannot verify it (65532 is distroless nonroot).
 podSecurityContext:
   runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
   seccompProfile:
     type: RuntimeDefault
 securityContext:
