@@ -66,6 +66,20 @@ go build -o wardrowbe-mcp ./cmd/wardrowbe-mcp
   --api-key "$MCP_API_KEY"
 ```
 
+Or deploy to Kubernetes with the Helm chart (published as an OCI artifact per
+release):
+
+```bash
+helm install wardrowbe-mcp \
+  oci://ghcr.io/jansitarski/charts/wardrowbe-mcp --version 0.3.0 \
+  -n wardrowbe --create-namespace \
+  --set config.wardrowbeUrl=http://backend.wardrowbe.svc.cluster.local:8000 \
+  --set apiKey.value="$MCP_API_KEY"
+```
+
+See [`charts/wardrowbe-mcp/`](charts/wardrowbe-mcp/README.md) for all values and a
+Flux `HelmRelease` example.
+
 Connect from Claude Code:
 
 ```bash
@@ -111,6 +125,8 @@ Contributions: see [CONTRIBUTING.md](CONTRIBUTING.md). Security reports:
 - [`docs/connecting-claude-via-cloudflare.md`](docs/connecting-claude-via-cloudflare.md)
   — exposing `/mcp` to Claude's native connectors through a Cloudflare tunnel + Access
   MCP portal: the required configuration and the client options.
+- [`charts/wardrowbe-mcp/`](charts/wardrowbe-mcp/README.md) — the Helm chart:
+  installable values, the API-key options, and a Flux `HelmRelease` example.
 - [`skills/wardrowbe-image-upload/`](skills/wardrowbe-image-upload/SKILL.md) — a Claude
   Code skill for bulk-importing garment photos and giving them accurate tags with
   Claude's own vision instead of the backend's auto-tagger.

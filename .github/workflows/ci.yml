@@ -36,3 +36,19 @@ jobs:
 
       - name: Test (race + coverage)
         run: go test -race -coverprofile=coverage.out ./...
+
+  helm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+
+      - name: Lint chart
+        run: helm lint charts/wardrowbe-mcp
+
+      - name: Template chart (smoke)
+        run: |
+          helm template ci charts/wardrowbe-mcp \
+            --set config.wardrowbeUrl=http://backend:8000 \
+            --set apiKey.value=ci-test >/dev/null

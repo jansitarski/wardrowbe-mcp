@@ -52,6 +52,17 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - uses: azure/setup-helm@v4
+
+      - name: Package and push Helm chart
+        run: |
+          version="${{ steps.meta.outputs.version }}"
+          helm registry login ghcr.io \
+            -u "${{ github.actor }}" --password-stdin <<<"${{ secrets.GITHUB_TOKEN }}"
+          helm package charts/wardrowbe-mcp --version "$version" --app-version "$version"
+          helm push "wardrowbe-mcp-${version}.tgz" \
+            "oci://ghcr.io/${{ github.repository_owner }}/charts"
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
