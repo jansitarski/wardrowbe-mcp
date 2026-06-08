@@ -81,15 +81,15 @@ func (c *Client) ItemImageFromPayload(ctx context.Context, itemID string, fields
 // token should be attached. A pre-signed absolute URL is fetched as-is; a
 // relative URL or a bare stored path is served from the backend with auth.
 func (c *Client) resolveImageURL(fields map[string]any, keys struct{ urlKey, pathKey string }) (string, bool, error) {
-	if u := stringField(fields, keys.urlKey); u != "" {
+	if u := StringField(fields, keys.urlKey); u != "" {
 		if isAbsoluteURL(u) {
 			return u, false, nil // pre-signed; transport already authenticates
 		}
 		return c.baseURL + ensureLeadingSlash(u), true, nil
 	}
 
-	if p := stringField(fields, keys.pathKey); p != "" {
-		userID := stringField(fields, "user_id")
+	if p := StringField(fields, keys.pathKey); p != "" {
+		userID := StringField(fields, "user_id")
 		if userID == "" {
 			return "", false, fmt.Errorf("missing user_id for image path %q", p)
 		}
@@ -199,7 +199,10 @@ func scaledDims(w, h, maxDim int) (int, int) {
 	return max(1, w*maxDim/h), maxDim
 }
 
-func stringField(fields map[string]any, key string) string {
+// StringField returns the trimmed string value at key in a decoded JSON object,
+// or "" if absent or not a string. Shared by the backend client and the MCP
+// layer for reading fields out of raw item/outfit payloads.
+func StringField(fields map[string]any, key string) string {
 	if v, ok := fields[key]; ok {
 		if s, ok := v.(string); ok {
 			return strings.TrimSpace(s)

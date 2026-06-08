@@ -209,17 +209,50 @@ func jwtExpiry(token string) (time.Time, bool) {
 	return time.Unix(claims.Exp, 0), true
 }
 
+// apiRequest is one fully-prepared backend call. path is the relative API path
+// used in logs/errors (never the absolute URL, which embeds the internal host);
+// reqURL is the absolute URL actually dialed. A nil body with an empty
+// contentType sends no body and no Content-Type header.
+type apiRequest struct {
+	method      string
+	path        string
+	reqURL      string
+	contentType string
+	body        []byte
+}
+
 // Request issues an authenticated JSON request to apiBase+path and returns the
 // raw response body. On a 401 it re-syncs once and retries; a second 401 is an
 // auth error. A 204 returns a nil body.
 func (c *Client) Request(ctx context.Context, method, path string, query url.Values, body any) (json.RawMessage, error) {
-	raw, status, err := c.do(ctx, method, path, query, body, false)
+	var encoded []byte
+	contentType := ""
+	if body != nil {
+		buf, err := json.Marshal(body)
+		if err != nil {
+			return nil, fmt.Errorf("marshal request body: %w", err)
+		}
+		encoded = buf
+		contentType = "application/json"
+	}
+	u := c.baseURL + apiBase + path
+	if len(query) > 0 {
+		u += "?" + query.Encode()
+	}
+	return c.execute(ctx, apiRequest{method: method, path: path, reqURL: u, contentType: contentType, body: encoded})
+}
+
+// execute runs a prepared request with one 401-triggered token re-sync. A 204
+// yields a nil body; any non-2xx yields an *APIError whose message omits the
+// backend body so backend internals never reach the caller.
+func (c *Client) execute(ctx context.Context, r apiRequest) (json.RawMessage, error) {
+	raw, status, err := c.attempt(ctx, r, false)
 	if err != nil {
 		return nil, err
 	}
 	if status == http.StatusUnauthorized {
-		c.log.Debug("backend 401, re-syncing token", "path", path)
-		raw, status, err = c.do(ctx, method, path, query, body, true)
+		c.log.Debug("backend 401, re-syncing token", "path", r.path)
+		raw, status, err = c.attempt(ctx, r, true)
 		if err != nil {
 			return nil, err
 		}
@@ -228,15 +261,15 @@ func (c *Client) Request(ctx context.Context, method, path string, query url.Val
 		return nil, nil
 	}
 	if status < 200 || status >= 300 {
-		c.log.Debug("backend error", "method", method, "path", path, "status", status, "body", string(raw))
-		return nil, &APIError{StatusCode: status, Method: method, Path: path, Body: string(raw)}
+		c.log.Debug("backend error", "method", r.method, "path", r.path, "status", status, "body", string(raw))
+		return nil, &APIError{StatusCode: status, Method: r.method, Path: r.path, Body: string(raw)}
 	}
 	return raw, nil
 }
 
-// do performs a single attempt. When forceResync is true a fresh token is
+// attempt performs a single request. When forceResync is true a fresh token is
 // fetched first (used on retry after a 401).
-func (c *Client) do(ctx context.Context, method, path string, query url.Values, body any, forceResync bool) (json.RawMessage, int, error) {
+func (c *Client) attempt(ctx context.Context, r apiRequest, forceResync bool) (json.RawMessage, int, error) {
 	var token string
 	var err error
 	if forceResync {
@@ -249,40 +282,31 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 	}
 
 	var reader io.Reader
-	if body != nil {
-		buf, mErr := json.Marshal(body)
-		if mErr != nil {
-			return nil, 0, fmt.Errorf("marshal request body: %w", mErr)
-		}
-		reader = bytes.NewReader(buf)
+	if r.body != nil {
+		reader = bytes.NewReader(r.body)
 	}
 
-	u := c.baseURL + apiBase + path
-	if len(query) > 0 {
-		u += "?" + query.Encode()
-	}
-
-	req, err := http.NewRequestWithContext(ctx, method, u, reader)
+	req, err := http.NewRequestWithContext(ctx, r.method, r.reqURL, reader)
 	if err != nil {
 		return nil, 0, fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "application/json")
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
+	if r.contentType != "" {
+		req.Header.Set("Content-Type", r.contentType)
 	}
 
 	resp, err := c.http.Do(req)
 	if err != nil {
 		// Don't surface raw transport errors (they embed internal hostnames/IPs)
 		// to the MCP caller; log them and return a generic message.
-		c.log.Debug("backend request failed", "method", method, "path", path, "err", err)
-		return nil, 0, fmt.Errorf("backend %s %s: request failed", method, path)
+		c.log.Debug("backend request failed", "method", r.method, "path", r.path, "err", err)
+		return nil, 0, fmt.Errorf("backend %s %s: request failed", r.method, r.path)
 	}
 	defer resp.Body.Close()
 	raw, err := readBoundedBody(resp.Body)
 	if err != nil {
-		return nil, resp.StatusCode, fmt.Errorf("%s %s: read body: %w", method, path, err)
+		return nil, resp.StatusCode, fmt.Errorf("%s %s: read body: %w", r.method, r.path, err)
 	}
 	return raw, resp.StatusCode, nil
 }
@@ -351,62 +375,16 @@ func sanitizeFilename(name string) string {
 }
 
 // requestRaw is the raw-body sibling of Request: it sends a pre-encoded body
-// with an explicit Content-Type and applies the same 401-resync-once retry.
+// with an explicit Content-Type (e.g. multipart) and applies the same
+// 401-resync-once retry via the shared execute path.
 func (c *Client) requestRaw(ctx context.Context, method, path, contentType string, body []byte) (json.RawMessage, error) {
-	raw, status, err := c.doRaw(ctx, method, path, contentType, body, false)
-	if err != nil {
-		return nil, err
-	}
-	if status == http.StatusUnauthorized {
-		c.log.Debug("backend 401, re-syncing token", "path", path)
-		raw, status, err = c.doRaw(ctx, method, path, contentType, body, true)
-		if err != nil {
-			return nil, err
-		}
-	}
-	if status == http.StatusNoContent {
-		return nil, nil
-	}
-	if status < 200 || status >= 300 {
-		c.log.Debug("backend error", "method", method, "path", path, "status", status, "body", string(raw))
-		return nil, &APIError{StatusCode: status, Method: method, Path: path, Body: string(raw)}
-	}
-	return raw, nil
-}
-
-func (c *Client) doRaw(ctx context.Context, method, path, contentType string, body []byte, forceResync bool) (json.RawMessage, int, error) {
-	var token string
-	var err error
-	if forceResync {
-		token, err = c.forceSync(ctx)
-	} else {
-		token, err = c.ensureToken(ctx)
-	}
-	if err != nil {
-		return nil, 0, err
-	}
-
-	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+apiBase+path, bytes.NewReader(body))
-	if err != nil {
-		return nil, 0, fmt.Errorf("build request: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Content-Type", contentType)
-
-	resp, err := c.http.Do(req)
-	if err != nil {
-		// Don't surface raw transport errors (they embed internal hostnames/IPs)
-		// to the MCP caller; log them and return a generic message.
-		c.log.Debug("backend request failed", "method", method, "path", path, "err", err)
-		return nil, 0, fmt.Errorf("backend %s %s: request failed", method, path)
-	}
-	defer resp.Body.Close()
-	raw, err := readBoundedBody(resp.Body)
-	if err != nil {
-		return nil, resp.StatusCode, fmt.Errorf("%s %s: read body: %w", method, path, err)
-	}
-	return raw, resp.StatusCode, nil
+	return c.execute(ctx, apiRequest{
+		method:      method,
+		path:        path,
+		reqURL:      c.baseURL + apiBase + path,
+		contentType: contentType,
+		body:        body,
+	})
 }
 
 // DeleteOutfit permanently removes an outfit (DELETE /outfits/{id}). The backend

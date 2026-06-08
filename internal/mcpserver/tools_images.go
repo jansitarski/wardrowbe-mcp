@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 
+	"github.com/jansitarski/wardrowbe-mcp/internal/wardrowbe"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
@@ -78,7 +79,7 @@ func (s *Server) handleOutfitImages(ctx context.Context, req mcp.CallToolRequest
 	manifest := make([]map[string]any, 0, len(garments))
 
 	for _, g := range garments {
-		itemID := stringFromJSON(g, "id")
+		itemID := wardrowbe.StringField(g, "id")
 		img, err := s.client.ItemImageFromPayload(ctx, itemID, g, variant, s.cfg.ImageMaxDim)
 		entry := map[string]any{"item_id": itemID}
 		if err != nil {
@@ -132,13 +133,4 @@ func extractOutfitGarments(raw json.RawMessage) ([]map[string]any, error) {
 		}
 	}
 	return nil, fmt.Errorf("no garment list found in outfit payload")
-}
-
-func stringFromJSON(m map[string]any, key string) string {
-	if v, ok := m[key]; ok {
-		if s, ok := v.(string); ok {
-			return s
-		}
-	}
-	return ""
 }

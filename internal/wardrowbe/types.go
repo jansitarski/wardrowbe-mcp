@@ -14,20 +14,6 @@ type syncResponse struct {
 	ExpiresIn   int    `json:"expires_in"`
 }
 
-// Item is a wardrobe garment. The backend returns more fields than we model;
-// only those the MCP reads or writes are typed. The raw payload is preserved by
-// callers that need to pass it through verbatim.
-type Item struct {
-	ID            string `json:"id"`
-	UserID        string `json:"user_id"`
-	Type          string `json:"type"`
-	Name          string `json:"name"`
-	ImagePath     string `json:"image_path"`
-	ThumbnailPath string `json:"thumbnail_path"`
-	MediumPath    string `json:"medium_path"`
-	ThumbnailURL  string `json:"thumbnail_url"`
-}
-
 // ItemTags is the structured attribute block written back to the backend.
 // Every field is optional; only set fields are sent.
 type ItemTags struct {
