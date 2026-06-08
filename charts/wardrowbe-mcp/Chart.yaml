@@ -1,0 +1,14 @@
+apiVersion: v2
+name: wardrowbe-mcp
+description: A Helm chart for the wardrowbe-mcp server — the Wardrowbe wardrobe API as MCP tools for Claude.
+type: application
+home: https://github.com/jansitarski/wardrowbe-mcp
+sources:
+  - https://github.com/jansitarski/wardrowbe-mcp
+maintainers:
+  - name: jansitarski
+# version is the chart version; appVersion tracks the application/image version.
+# The release workflow overrides both with the pushed git tag (`--version` /
+# `--app-version`), so these are only the local/dev defaults.
+version: 0.3.0
+appVersion: "0.3.0"

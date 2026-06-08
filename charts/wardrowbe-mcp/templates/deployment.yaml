@@ -1,0 +1,105 @@
+{{- if and (eq (toString .Values.config.transport) "http") (not .Values.apiKey.value) (not .Values.apiKey.existingSecret) }}
+{{- fail "config.transport=http requires an API key: set apiKey.value or apiKey.existingSecret" }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "wardrowbe-mcp.fullname" . }}
+  labels:
+    {{- include "wardrowbe-mcp.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "wardrowbe-mcp.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "wardrowbe-mcp.selectorLabels" . | nindent 8 }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "wardrowbe-mcp.serviceAccountName" . }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: {{ .Chart.Name }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          args:
+            - --transport={{ .Values.config.transport }}
+            - --host={{ .Values.config.host }}
+            - --port={{ .Values.config.port }}
+            - --wardrowbe-url={{ required "config.wardrowbeUrl is required (the Wardrowbe backend base URL)" .Values.config.wardrowbeUrl }}
+            - --auth={{ .Values.config.auth }}
+            {{- with .Values.config.externalId }}
+            - --external-id={{ . }}
+            {{- end }}
+            {{- with .Values.config.externalEmail }}
+            - --external-email={{ . }}
+            {{- end }}
+            {{- with .Values.config.portalResourceUrl }}
+            - --portal-resource-url={{ . }}
+            {{- end }}
+            {{- with .Values.config.maxConcurrent }}
+            - --max-concurrent={{ . }}
+            {{- end }}
+            {{- with .Values.config.maxBodyMb }}
+            - --max-body-mb={{ . }}
+            {{- end }}
+            {{- range .Values.config.extraArgs }}
+            - {{ . | quote }}
+            {{- end }}
+          env:
+            - name: MCP_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "wardrowbe-mcp.secretName" . }}
+                  key: {{ .Values.apiKey.key }}
+                  # optional so a stdio/keyless deploy still starts; the http
+                  # path is gated by the fail() guard at the top of this file.
+                  optional: true
+            {{- range $k, $v := .Values.env }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.config.port }}
+              protocol: TCP
+          {{- with .Values.readinessProbe }}
+          readinessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.livenessProbe }}
+          livenessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
