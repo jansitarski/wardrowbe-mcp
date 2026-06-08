@@ -69,3 +69,36 @@ func TestOIDCRequiresFields(t *testing.T) {
 		t.Fatal("expected error: oidc mode missing required fields")
 	}
 }
+
+func TestInvalidWardrowbeURLRejected(t *testing.T) {
+	for _, u := range []string{"not-a-url", "postgres://db/x", "/just/a/path"} {
+		if _, err := Load([]string{"--api-key", "k", "--wardrowbe-url", u}); err == nil {
+			t.Errorf("expected error for --wardrowbe-url %q", u)
+		}
+	}
+}
+
+func TestOIDCIssuerMustBeHTTPS(t *testing.T) {
+	_, err := Load([]string{
+		"--api-key", "k", "--auth", "oidc",
+		"--oidc-issuer-url", "http://issuer.example.com",
+		"--oidc-client-id", "c", "--oidc-refresh-token", "r",
+	})
+	if err == nil {
+		t.Fatal("expected error: oidc issuer must be https")
+	}
+}
+
+func TestOIDCValidHTTPSIssuerAccepted(t *testing.T) {
+	cfg, err := Load([]string{
+		"--api-key", "k", "--auth", "oidc",
+		"--oidc-issuer-url", "https://issuer.example.com",
+		"--oidc-client-id", "c", "--oidc-refresh-token", "r",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.AuthMode != AuthOIDC {
+		t.Errorf("got auth mode %q", cfg.AuthMode)
+	}
+}
