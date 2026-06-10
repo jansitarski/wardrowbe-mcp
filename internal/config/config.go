@@ -88,6 +88,22 @@ type Config struct {
 func Load(args []string) (Config, error) {
 	fs := flag.NewFlagSet("wardrowbe-mcp", flag.ContinueOnError)
 
+	// Collect malformed integer env vars instead of silently falling back to the
+	// default, so a typo (e.g. MCP_MAX_CONCURRENT=abc) fails loudly at startup.
+	var envErrs []string
+	envOrInt := func(key string, fallback int) int {
+		v, ok := os.LookupEnv(key)
+		if !ok || v == "" {
+			return fallback
+		}
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			envErrs = append(envErrs, fmt.Sprintf("%s=%q (not an integer)", key, v))
+			return fallback
+		}
+		return n
+	}
+
 	transport := fs.String("transport", envOr("MCP_TRANSPORT", defaultTransport), "transport: http or stdio")
 	host := fs.String("host", envOr("MCP_BIND_HOST", defaultHost), "bind host (http)")
 	port := fs.Int("port", envOrInt("MCP_BIND_PORT", defaultPort), "bind port (http)")
@@ -115,6 +131,9 @@ func Load(args []string) (Config, error) {
 
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
+	}
+	if len(envErrs) > 0 {
+		return Config{}, fmt.Errorf("invalid integer environment variable(s): %s", strings.Join(envErrs, ", "))
 	}
 
 	cfg := Config{
@@ -176,6 +195,14 @@ func (c Config) validate() error {
 		return fmt.Errorf("invalid --image-default-variant %q (want thumb/medium/full)", c.ImageVariant)
 	}
 
+	// LogLevel is uppercased in Load; reject anything the logger would silently
+	// map to INFO so a typo (e.g. "DEBG") fails fast instead of hiding output.
+	switch c.LogLevel {
+	case "DEBUG", "INFO", "WARN", "WARNING", "ERROR":
+	default:
+		return fmt.Errorf("invalid --log-level %q (want debug/info/warn/error)", c.LogLevel)
+	}
+
 	if c.Transport == TransportHTTP {
 		if c.APIKey == "" {
 			return errors.New("--api-key (MCP_API_KEY) is required for http transport")
@@ -213,15 +240,6 @@ func (c Config) Addr() string {
 func envOr(key, fallback string) string {
 	if v, ok := os.LookupEnv(key); ok && v != "" {
 		return v
-	}
-	return fallback
-}
-
-func envOrInt(key string, fallback int) int {
-	if v, ok := os.LookupEnv(key); ok && v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			return n
-		}
 	}
 	return fallback
 }

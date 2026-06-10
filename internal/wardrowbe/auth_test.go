@@ -71,6 +71,28 @@ func TestOIDCSyncPayloadHappyPath(t *testing.T) {
 	}
 }
 
+func TestOIDCDiscoveryCachedAcrossCalls(t *testing.T) {
+	idTok := makeIDToken(map[string]any{"sub": "user-123"})
+	discoveries := 0
+	p, stop := startOIDC(t,
+		func(self string) (int, string) {
+			discoveries++
+			return selfTokenEndpoint(self)
+		},
+		func() (int, string) { return 200, `{"id_token":"` + idTok + `"}` },
+	)
+	defer stop()
+
+	for i := 0; i < 3; i++ {
+		if _, err := p.SyncPayload(context.Background()); err != nil {
+			t.Fatalf("call %d: unexpected error: %v", i, err)
+		}
+	}
+	if discoveries != 1 {
+		t.Errorf("discovery fetched %d times, want 1 (should be cached)", discoveries)
+	}
+}
+
 func TestOIDCDiscoveryNon200(t *testing.T) {
 	p, stop := startOIDC(t,
 		func(string) (int, string) { return 500, `{}` },

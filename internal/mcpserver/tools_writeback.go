@@ -77,7 +77,7 @@ func (s *Server) handleUpdateItem(ctx context.Context, req mcp.CallToolRequest) 
 
 	raw, err := s.client.UpdateItem(ctx, itemID, patch)
 	if err != nil {
-		return mcp.NewToolResultErrorFromErr("update item failed", err), nil
+		return toolErr("update item failed", err), nil
 	}
 	return jsonText(raw), nil
 }
@@ -116,7 +116,7 @@ func (s *Server) handleSetItemTags(ctx context.Context, req mcp.CallToolRequest)
 
 	raw, err := s.client.UpdateItem(ctx, itemID, wardrowbe.ItemUpdate{Tags: &tags})
 	if err != nil {
-		return mcp.NewToolResultErrorFromErr("set item tags failed", err), nil
+		return toolErr("set item tags failed", err), nil
 	}
 	return jsonText(raw), nil
 }
@@ -132,7 +132,7 @@ func (s *Server) handleSetItemDescription(ctx context.Context, req mcp.CallToolR
 	}
 	raw, err := s.client.UpdateItem(ctx, itemID, wardrowbe.ItemUpdate{Notes: &desc})
 	if err != nil {
-		return mcp.NewToolResultErrorFromErr("set item description failed", err), nil
+		return toolErr("set item description failed", err), nil
 	}
 	return jsonText(raw), nil
 }

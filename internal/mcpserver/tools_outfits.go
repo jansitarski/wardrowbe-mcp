@@ -110,7 +110,7 @@ func (s *Server) handleSuggestOutfit(ctx context.Context, req mcp.CallToolReques
 
 	raw, err := s.client.Request(ctx, http.MethodPost, "/outfits/suggest", nil, body)
 	if err != nil {
-		return mcp.NewToolResultErrorFromErr("outfit suggestion failed", err), nil
+		return toolErr("outfit suggestion failed", err), nil
 	}
 	return jsonText(raw), nil
 }
@@ -166,7 +166,7 @@ func (s *Server) handleCreateOutfit(ctx context.Context, req mcp.CallToolRequest
 
 	raw, err := s.client.CreateStudioOutfit(ctx, outfit)
 	if err != nil {
-		return mcp.NewToolResultErrorFromErr("create outfit failed", err), nil
+		return toolErr("create outfit failed", err), nil
 	}
 	return jsonText(raw), nil
 }
@@ -174,11 +174,11 @@ func (s *Server) handleCreateOutfit(ctx context.Context, req mcp.CallToolRequest
 func (s *Server) handleLatestOutfit(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	id, err := s.firstOutfitID(ctx)
 	if err != nil {
-		return mcp.NewToolResultErrorFromErr("no latest outfit", err), nil
+		return toolErr("no latest outfit", err), nil
 	}
 	raw, err := s.client.Request(ctx, http.MethodGet, "/outfits/"+url.PathEscape(id), nil, nil)
 	if err != nil {
-		return mcp.NewToolResultErrorFromErr("get latest outfit failed", err), nil
+		return toolErr("get latest outfit failed", err), nil
 	}
 	return jsonText(raw), nil
 }
@@ -190,7 +190,7 @@ func (s *Server) handleGetOutfit(ctx context.Context, req mcp.CallToolRequest) (
 	}
 	raw, err := s.client.Request(ctx, http.MethodGet, "/outfits/"+url.PathEscape(outfitID), nil, nil)
 	if err != nil {
-		return mcp.NewToolResultErrorFromErr("get outfit failed", err), nil
+		return toolErr("get outfit failed", err), nil
 	}
 	return jsonText(raw), nil
 }
@@ -202,7 +202,7 @@ func (s *Server) handleDeleteOutfit(ctx context.Context, req mcp.CallToolRequest
 	}
 	raw, err := s.client.DeleteOutfit(ctx, outfitID)
 	if err != nil {
-		return mcp.NewToolResultErrorFromErr("delete outfit failed", err), nil
+		return toolErr("delete outfit failed", err), nil
 	}
 	if raw != nil {
 		return jsonText(raw), nil
@@ -218,7 +218,7 @@ func (s *Server) handleRecentOutfits(ctx context.Context, req mcp.CallToolReques
 	}
 	raw, err := s.client.Request(ctx, http.MethodGet, "/outfits", q, nil)
 	if err != nil {
-		return mcp.NewToolResultErrorFromErr("recent outfits fetch failed", err), nil
+		return toolErr("recent outfits fetch failed", err), nil
 	}
 	return jsonText(raw), nil
 }
@@ -227,12 +227,12 @@ func (s *Server) latestOutfitAction(action string) func(context.Context, mcp.Cal
 	return func(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		id, err := s.firstOutfitID(ctx)
 		if err != nil {
-			return mcp.NewToolResultErrorFromErr("no latest outfit", err), nil
+			return toolErr("no latest outfit", err), nil
 		}
 		path := "/outfits/" + url.PathEscape(id) + "/" + action
 		raw, err := s.client.Request(ctx, http.MethodPost, path, nil, nil)
 		if err != nil {
-			return mcp.NewToolResultErrorFromErr(action+" outfit failed", err), nil
+			return toolErr(action+" outfit failed", err), nil
 		}
 		return jsonText(raw), nil
 	}
@@ -260,7 +260,7 @@ func (s *Server) handleOutfitFeedback(ctx context.Context, req mcp.CallToolReque
 	path := "/outfits/" + url.PathEscape(outfitID) + "/feedback"
 	raw, err := s.client.Request(ctx, http.MethodPost, path, nil, body)
 	if err != nil {
-		return mcp.NewToolResultErrorFromErr("submit feedback failed", err), nil
+		return toolErr("submit feedback failed", err), nil
 	}
 	return jsonText(raw), nil
 }

@@ -30,9 +30,11 @@ const (
 	// by the SSRF dialer; this caps the chain length as defense-in-depth (a
 	// legitimate CDN may 302 once to a signed URL, but not many times).
 	maxImageRedirects = 5
-	// browserUA avoids naive hotlink/User-Agent blocks on retail CDNs.
+	// browserUA avoids naive hotlink/User-Agent blocks on retail CDNs. It is kept
+	// generic (no product/host identifier) so outbound fetches don't fingerprint
+	// this server to every CDN it reaches.
 	browserUA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 " +
-		"(KHTML, like Gecko) Chrome/124.0 Safari/537.36 wardrowbe-mcp"
+		"(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 )
 
 func (s *Server) registerCreateTools() {
@@ -81,14 +83,14 @@ func (s *Server) handleCreateItemFromURL(ctx context.Context, req mcp.CallToolRe
 		return mcp.NewToolResultError("image_url is required"), nil
 	}
 
-	data, mime, filename, err := fetchExternalImage(ctx, imageURL)
+	data, mime, filename, err := fetchExternalImage(ctx, imageURL, s.imageTransport)
 	if err != nil {
 		return mcp.NewToolResultErrorFromErr("could not fetch image", err), nil
 	}
 
 	raw, err := s.client.CreateItemFromImage(ctx, data, filename, mime, itemFields(req))
 	if err != nil {
-		return mcp.NewToolResultErrorFromErr("create item failed", err), nil
+		return toolErr("create item failed", err), nil
 	}
 	// Log only the host, not the full URL — retail/CDN URLs often carry signed
 	// tokens or tracking params we don't want in production logs.
@@ -114,7 +116,7 @@ func (s *Server) handleCreateItemFromBase64(ctx context.Context, req mcp.CallToo
 
 	result, err := s.client.CreateItemFromImage(ctx, data, filename, mime, itemFields(req))
 	if err != nil {
-		return mcp.NewToolResultErrorFromErr("create item failed", err), nil
+		return toolErr("create item failed", err), nil
 	}
 	s.log.Info("created item from base64", "filename", filename, "bytes", len(data), "mime", mime)
 	return jsonText(result), nil
@@ -206,7 +208,7 @@ func hostOnly(rawURL string) string {
 // fetchExternalImage downloads an image from a public URL with an SSRF guard
 // (http(s) only, no private/loopback addresses), a size cap, and a content-type
 // check. Returns the bytes, sniffed MIME, and a sensible filename.
-func fetchExternalImage(ctx context.Context, rawURL string) ([]byte, string, string, error) {
+func fetchExternalImage(ctx context.Context, rawURL string, transport func() *http.Transport) ([]byte, string, string, error) {
 	u, err := url.Parse(strings.TrimSpace(rawURL))
 	if err != nil {
 		return nil, "", "", fmt.Errorf("invalid url: %w", err)
@@ -217,8 +219,14 @@ func fetchExternalImage(ctx context.Context, rawURL string) ([]byte, string, str
 
 	client := &http.Client{
 		Timeout:   imageFetchTimeout,
-		Transport: imageFetchTransport(),
-		CheckRedirect: func(_ *http.Request, via []*http.Request) error {
+		Transport: transport(),
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			// Re-validate the scheme on every hop: a 3xx can try to bounce us to a
+			// non-http(s) scheme, and the initial-URL check above does not cover
+			// redirect targets. (The SSRF dialer still re-checks the resolved IP.)
+			if req.URL.Scheme != "http" && req.URL.Scheme != "https" {
+				return fmt.Errorf("refusing redirect to non-http(s) scheme %q", req.URL.Scheme)
+			}
 			if len(via) >= maxImageRedirects {
 				return fmt.Errorf("stopped after %d redirects", maxImageRedirects)
 			}
@@ -274,13 +282,6 @@ func fetchExternalImage(ctx context.Context, rawURL string) ([]byte, string, str
 	return data, mime, filenameFor(u, mime), nil
 }
 
-// imageFetchTransport builds the HTTP transport used for external image fetches.
-// Production always uses the SSRF-guarded transport (ssrfTransport); it is a
-// package-private var solely so the in-package integration test can fetch from a
-// loopback test server. Overriding it requires in-package code, so it is not a
-// runtime attack surface.
-var imageFetchTransport = ssrfTransport
-
 // ssrfTransport returns an http transport whose dialer refuses to connect to
 // private, loopback, link-local or unspecified addresses — checked on the IP
 // actually dialed, which defeats DNS-rebinding.
@@ -308,13 +309,26 @@ func ssrfTransport() *http.Transport {
 }
 
 func isPublicIP(ip net.IP) bool {
+	// IsMulticast covers every multicast scope (link-, site-, org-, global- and
+	// interface-local), not just the link-local range.
 	if ip == nil || ip.IsLoopback() || ip.IsPrivate() ||
-		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
+		ip.IsLinkLocalUnicast() || ip.IsMulticast() || ip.IsUnspecified() {
 		return false
 	}
 	// Block IPv4 carrier-grade NAT (100.64.0.0/10), commonly internal.
 	if v4 := ip.To4(); v4 != nil && v4[0] == 100 && v4[1] >= 64 && v4[1] <= 127 {
 		return false
+	}
+	// Block the NAT64 well-known prefix 64:ff9b::/96 (RFC 6052): such addresses
+	// embed an IPv4 target that a NAT64 gateway would translate, which can reach
+	// internal IPv4 ranges the IPv6 checks above don't see.
+	if v4 := ip.To4(); v4 == nil {
+		if ip16 := ip.To16(); ip16 != nil &&
+			ip16[0] == 0x00 && ip16[1] == 0x64 && ip16[2] == 0xff && ip16[3] == 0x9b &&
+			ip16[4] == 0 && ip16[5] == 0 && ip16[6] == 0 && ip16[7] == 0 &&
+			ip16[8] == 0 && ip16[9] == 0 && ip16[10] == 0 && ip16[11] == 0 {
+			return false
+		}
 	}
 	return true
 }

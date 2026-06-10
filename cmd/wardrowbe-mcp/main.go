@@ -72,6 +72,14 @@ func serveHTTP(cfg config.Config, srv *mcpserver.Server, logger *slog.Logger) er
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	if cfg.AuthMode == config.AuthDev {
+		// Dev auth sends a fixed identity to the backend — every caller is treated
+		// as the same user. Fine for a single-user homelab, dangerous if this is
+		// unknowingly exposed to multiple people. Make it impossible to miss.
+		logger.Warn("running with dev auth on http transport: all requests use a fixed identity; "+
+			"use --auth oidc for real per-user identity", "external_id", cfg.ExternalID)
+	}
+
 	httpSrv := &http.Server{
 		Addr:              cfg.Addr(),
 		Handler:           srv.HTTPHandler(),
@@ -110,7 +118,7 @@ func buildProvider(cfg config.Config) (wardrowbe.TokenProvider, error) {
 			DisplayName: cfg.ExternalID,
 		}, nil
 	case config.AuthOIDC:
-		return wardrowbe.OIDCTokenProvider{
+		return &wardrowbe.OIDCTokenProvider{
 			Issuer:       cfg.OIDCIssuerURL,
 			ClientID:     cfg.OIDCClientID,
 			ClientSecret: cfg.OIDCClientSecret,

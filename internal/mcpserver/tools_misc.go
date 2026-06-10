@@ -51,7 +51,7 @@ func (s *Server) registerMiscTools() {
 func (s *Server) handleHealth(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	raw, err := s.client.Request(ctx, http.MethodGet, "/health", nil, nil)
 	if err != nil {
-		return mcp.NewToolResultErrorFromErr("health check failed", err), nil
+		return toolErr("health check failed", err), nil
 	}
 	return jsonText(raw), nil
 }
@@ -60,13 +60,17 @@ func (s *Server) handleMostWorn(ctx context.Context, req mcp.CallToolRequest) (*
 	limit := clampInt(req.GetInt("limit", 5), 1, 10)
 	raw, err := s.client.Request(ctx, http.MethodGet, "/analytics", nil, nil)
 	if err != nil {
-		return mcp.NewToolResultErrorFromErr("analytics fetch failed", err), nil
+		return toolErr("analytics fetch failed", err), nil
 	}
 
 	items := extractMostWorn(raw)
 	if items == nil {
-		// Structure not as expected — return the full analytics so the model can adapt.
-		return jsonText(raw), nil
+		// The advertised top-N list isn't where we expect it. Fail clearly rather
+		// than silently returning the entire (unsliced) analytics blob, which the
+		// caller did not ask for and would misread as the most-worn list.
+		return mcp.NewToolResultError(
+			"backend analytics did not include a most-worn list; " +
+				"use get_wardrobe_summary for the full analytics payload"), nil
 	}
 	if len(items) > limit {
 		items = items[:limit]
@@ -97,7 +101,7 @@ func (s *Server) handleRecentNotifications(ctx context.Context, req mcp.CallTool
 	q := url.Values{"limit": {itoa(limit)}}
 	raw, err := s.client.Request(ctx, http.MethodGet, "/notifications/history", q, nil)
 	if err != nil {
-		return mcp.NewToolResultErrorFromErr("notifications fetch failed", err), nil
+		return toolErr("notifications fetch failed", err), nil
 	}
 	return jsonText(raw), nil
 }
@@ -110,7 +114,7 @@ func (s *Server) handleTestNotification(ctx context.Context, req mcp.CallToolReq
 	path := "/notifications/settings/" + url.PathEscape(settingID) + "/test"
 	raw, err := s.client.Request(ctx, http.MethodPost, path, nil, nil)
 	if err != nil {
-		return mcp.NewToolResultErrorFromErr("test notification failed", err), nil
+		return toolErr("test notification failed", err), nil
 	}
 	return jsonText(raw), nil
 }
@@ -120,7 +124,7 @@ func (s *Server) simpleGet(path string) func(context.Context, mcp.CallToolReques
 	return func(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		raw, err := s.client.Request(ctx, http.MethodGet, path, nil, nil)
 		if err != nil {
-			return mcp.NewToolResultErrorFromErr("request failed", err), nil
+			return toolErr("request failed", err), nil
 		}
 		return jsonText(raw), nil
 	}

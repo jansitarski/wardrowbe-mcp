@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/url"
 
@@ -41,7 +40,7 @@ func (s *Server) handleItemImage(ctx context.Context, req mcp.CallToolRequest) (
 
 	img, err := s.client.ItemImage(ctx, itemID, variant, s.cfg.ImageMaxDim)
 	if err != nil {
-		return mcp.NewToolResultErrorFromErr("get item image failed", err), nil
+		return toolErr("get item image failed", err), nil
 	}
 
 	manifest, _ := json.Marshal(map[string]any{
@@ -64,12 +63,12 @@ func (s *Server) handleOutfitImages(ctx context.Context, req mcp.CallToolRequest
 
 	raw, err := s.client.Request(ctx, http.MethodGet, "/outfits/"+url.PathEscape(outfitID), nil, nil)
 	if err != nil {
-		return mcp.NewToolResultErrorFromErr("get outfit failed", err), nil
+		return toolErr("get outfit failed", err), nil
 	}
 
 	garments, err := extractOutfitGarments(raw)
 	if err != nil {
-		return mcp.NewToolResultErrorFromErr("could not read outfit garments", err), nil
+		return toolErr("could not read outfit garments", err), nil
 	}
 	if len(garments) == 0 {
 		return mcp.NewToolResultError("outfit has no garments with images"), nil
@@ -132,5 +131,8 @@ func extractOutfitGarments(raw json.RawMessage) ([]map[string]any, error) {
 			}
 		}
 	}
-	return nil, fmt.Errorf("no garment list found in outfit payload")
+	// No recognised garment-list key: a well-formed but garment-less outfit.
+	// Return an empty list (not an error) and let the caller's len==0 guard produce
+	// the user-facing "no garments" message — only malformed JSON is a real error.
+	return nil, nil
 }

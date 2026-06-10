@@ -161,7 +161,7 @@ func mockBackend(t *testing.T) *httptest.Server {
 	return srv
 }
 
-func newTestClient(t *testing.T, backendURL string) *client.Client {
+func newTestClient(t *testing.T, backendURL string, opts ...func(*Server)) *client.Client {
 	t.Helper()
 	cfg := config.Config{
 		Transport: config.TransportStdio, AuthMode: config.AuthDev,
@@ -171,6 +171,9 @@ func newTestClient(t *testing.T, backendURL string) *client.Client {
 	provider := wardrowbe.DevTokenProvider{ExternalID: cfg.ExternalID, Email: cfg.ExternalEmail}
 	wc := wardrowbe.NewClient(backendURL, provider, &http.Client{Timeout: 10 * time.Second}, slog.Default())
 	srv := New(cfg, wc, slog.Default())
+	for _, opt := range opts {
+		opt(srv)
+	}
 
 	c, err := client.NewInProcessClient(srv.MCP())
 	if err != nil {
@@ -298,14 +301,12 @@ func TestToolsHappyPath(t *testing.T) {
 // thus exercised end-to-end without outbound network.
 func TestCreateItemFromURL(t *testing.T) {
 	backend := mockBackend(t)
-	c := newTestClient(t, backend.URL)
-
-	// Swaps the package-level imageFetchTransport. Tests in this package must run
-	// sequentially (do NOT add t.Parallel here or in tests sharing this var) — the
-	// -race CI step would otherwise flag the unsynchronized read/write.
-	orig := imageFetchTransport
-	imageFetchTransport = func() *http.Transport { return &http.Transport{} }
-	t.Cleanup(func() { imageFetchTransport = orig })
+	// Inject a plain transport on this server instance so the in-process fetch can
+	// reach the loopback mock backend. The override is per-instance (no shared
+	// package state), so this is race-free and does not constrain t.Parallel.
+	c := newTestClient(t, backend.URL, func(s *Server) {
+		s.imageTransport = func() *http.Transport { return &http.Transport{} }
+	})
 
 	res := call(t, c, "create_item_from_url", map[string]any{
 		"image_url": backend.URL + "/media/x.png", "name": "From URL",
@@ -319,7 +320,7 @@ func TestCreateItemFromURL(t *testing.T) {
 }
 
 // TestToolGuards asserts the validation/SSRF guards reject bad input. These run
-// with the real SSRF-guarded transport (imageFetchTransport is not overridden).
+// with the real SSRF-guarded transport (the real ssrfTransport is used).
 func TestToolGuards(t *testing.T) {
 	c := newTestClient(t, mockBackend(t).URL)
 

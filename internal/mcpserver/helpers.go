@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/jansitarski/wardrowbe-mcp/internal/wardrowbe"
+	"github.com/mark3labs/mcp-go/mcp"
 )
 
 func clampInt(v, lo, hi int) int {
@@ -42,6 +43,16 @@ func safeErrText(err error) string {
 		return apiErr.Error()
 	}
 	return "request failed"
+}
+
+// toolErr returns a tool error result for a backend-call failure with its
+// underlying error sanitized via safeErrText, so transport internals never reach
+// the MCP caller even if a future code path forgets to sanitize at the client
+// layer. Use this for errors that originate from the backend client; locally
+// constructed, already-safe messages (e.g. image-fetch validation) can be
+// surfaced verbatim.
+func toolErr(summary string, err error) *mcp.CallToolResult {
+	return mcp.NewToolResultError(summary + ": " + safeErrText(err))
 }
 
 // firstOutfitID fetches the outfit list and returns the id of the first

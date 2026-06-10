@@ -29,6 +29,12 @@ func TestIsPublicIP(t *testing.T) {
 		"::1":              false, // ipv6 loopback
 		"fd00::1":          false, // ipv6 ULA (private)
 		"2606:4700:4700::": true,  // public ipv6
+		"224.0.0.1":        false, // ipv4 multicast
+		"239.255.255.250":  false, // ipv4 admin-scoped multicast (SSDP)
+		"ff02::1":          false, // ipv6 link-local multicast
+		"ff05::1":          false, // ipv6 site-local multicast
+		"ff0e::1":          false, // ipv6 global multicast
+		"64:ff9b::808:808": false, // NAT64 well-known prefix (embeds 8.8.8.8)
 	}
 	for ipStr, want := range cases {
 		t.Run(ipStr, func(t *testing.T) {
@@ -41,7 +47,7 @@ func TestIsPublicIP(t *testing.T) {
 
 func TestFetchExternalImageRejectsNonHTTP(t *testing.T) {
 	for _, u := range []string{"file:///etc/passwd", "ftp://host/x.jpg", "data:image/png;base64,xx"} {
-		if _, _, _, err := fetchExternalImage(context.Background(), u); err == nil {
+		if _, _, _, err := fetchExternalImage(context.Background(), u, ssrfTransport); err == nil {
 			t.Errorf("expected rejection for %q", u)
 		}
 	}
@@ -55,8 +61,33 @@ func TestFetchExternalImageRejectsLoopbackOrNonImage(t *testing.T) {
 	defer srv.Close()
 	// httptest listens on 127.0.0.1 — the SSRF guard refuses the dial, which is
 	// itself a correct failure (and also exercises that path).
-	if _, _, _, err := fetchExternalImage(context.Background(), srv.URL); err == nil {
+	if _, _, _, err := fetchExternalImage(context.Background(), srv.URL, ssrfTransport); err == nil {
 		t.Error("expected error fetching a loopback / non-image host")
+	}
+}
+
+func TestFetchExternalImageRedirectGuards(t *testing.T) {
+	// A plain transport lets the loopback dial succeed so CheckRedirect runs;
+	// the SSRF dialer would otherwise refuse the loopback hop first.
+	plain := func() *http.Transport { return &http.Transport{} }
+
+	// A redirect to a non-http(s) scheme must be refused per hop.
+	badScheme := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "ftp://example.com/x.png", http.StatusFound)
+	}))
+	defer badScheme.Close()
+	if _, _, _, err := fetchExternalImage(context.Background(), badScheme.URL, plain); err == nil {
+		t.Error("expected error on redirect to non-http(s) scheme")
+	}
+
+	// A redirect loop must be stopped by the hop cap rather than followed forever.
+	var loop *httptest.Server
+	loop = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, loop.URL+r.URL.Path+"x", http.StatusFound)
+	}))
+	defer loop.Close()
+	if _, _, _, err := fetchExternalImage(context.Background(), loop.URL, plain); err == nil {
+		t.Error("expected error on redirect loop exceeding the hop cap")
 	}
 }
 

@@ -78,7 +78,7 @@ func (s *Server) handleListItems(ctx context.Context, req mcp.CallToolRequest) (
 
 	raw, err := s.client.Request(ctx, http.MethodGet, "/items", q, nil)
 	if err != nil {
-		return mcp.NewToolResultErrorFromErr("list items failed", err), nil
+		return toolErr("list items failed", err), nil
 	}
 	return jsonText(raw), nil
 }
@@ -90,7 +90,7 @@ func (s *Server) handleGetItem(ctx context.Context, req mcp.CallToolRequest) (*m
 	}
 	raw, err := s.client.Request(ctx, http.MethodGet, "/items/"+url.PathEscape(itemID), nil, nil)
 	if err != nil {
-		return mcp.NewToolResultErrorFromErr("get item failed", err), nil
+		return toolErr("get item failed", err), nil
 	}
 	return jsonText(raw), nil
 }
@@ -100,7 +100,7 @@ func (s *Server) handleItemsToWash(ctx context.Context, req mcp.CallToolRequest)
 	q := url.Values{"needs_wash": {"true"}, "page_size": {itoa(limit)}}
 	raw, err := s.client.Request(ctx, http.MethodGet, "/items", q, nil)
 	if err != nil {
-		return mcp.NewToolResultErrorFromErr("items-to-wash fetch failed", err), nil
+		return toolErr("items-to-wash fetch failed", err), nil
 	}
 	return jsonText(raw), nil
 }
@@ -153,7 +153,7 @@ func (s *Server) itemAction(ctx context.Context, itemID, action string, body any
 	path := "/items/" + url.PathEscape(itemID) + "/" + action
 	raw, err := s.client.Request(ctx, http.MethodPost, path, nil, body)
 	if err != nil {
-		return mcp.NewToolResultErrorFromErr(action+" failed", err), nil
+		return toolErr(action+" failed", err), nil
 	}
 	return jsonText(raw), nil
 }

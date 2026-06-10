@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -43,13 +44,17 @@ func (d DevTokenProvider) SyncPayload(_ context.Context) (SyncPayload, error) {
 }
 
 // OIDCTokenProvider exchanges a refresh token for an id_token and projects its
-// claims (sub, email, name) into a SyncPayload.
+// claims (sub, email, name) into a SyncPayload. Its methods use pointer receivers
+// so the discovered token endpoint can be cached across calls.
 type OIDCTokenProvider struct {
 	Issuer       string
 	ClientID     string
 	ClientSecret string
 	RefreshToken string
 	HTTPClient   *http.Client
+
+	mu            sync.Mutex
+	tokenEndpoint string // cached after first successful discovery
 }
 
 type oidcDiscovery struct {
@@ -70,7 +75,7 @@ type idTokenClaims struct {
 
 // SyncPayload implements TokenProvider by refreshing the id_token each call.
 // The JWT cache in Client throttles how often this actually runs.
-func (o OIDCTokenProvider) SyncPayload(ctx context.Context) (SyncPayload, error) {
+func (o *OIDCTokenProvider) SyncPayload(ctx context.Context) (SyncPayload, error) {
 	tokenEndpoint, err := o.discoverTokenEndpoint(ctx)
 	if err != nil {
 		return SyncPayload{}, err
@@ -127,7 +132,17 @@ func (o OIDCTokenProvider) SyncPayload(ctx context.Context) (SyncPayload, error)
 	return SyncPayload{ExternalID: claims.Sub, Email: claims.Email, DisplayName: claims.Name}, nil
 }
 
-func (o OIDCTokenProvider) discoverTokenEndpoint(ctx context.Context) (string, error) {
+func (o *OIDCTokenProvider) discoverTokenEndpoint(ctx context.Context) (string, error) {
+	// The token endpoint never changes for a given issuer; cache it after the
+	// first successful discovery so each token refresh doesn't re-fetch the
+	// discovery document.
+	o.mu.Lock()
+	cached := o.tokenEndpoint
+	o.mu.Unlock()
+	if cached != "" {
+		return cached, nil
+	}
+
 	discoveryURL := strings.TrimRight(o.Issuer, "/") + "/.well-known/openid-configuration"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, discoveryURL, nil)
 	if err != nil {
@@ -158,10 +173,14 @@ func (o OIDCTokenProvider) discoverTokenEndpoint(ctx context.Context) (string, e
 	if iss, err := url.Parse(o.Issuer); err == nil && !strings.EqualFold(ep.Host, iss.Host) {
 		return "", fmt.Errorf("oidc: token_endpoint host %q does not match issuer host %q", ep.Host, iss.Host)
 	}
+
+	o.mu.Lock()
+	o.tokenEndpoint = disc.TokenEndpoint
+	o.mu.Unlock()
 	return disc.TokenEndpoint, nil
 }
 
-func (o OIDCTokenProvider) client() *http.Client {
+func (o *OIDCTokenProvider) client() *http.Client {
 	if o.HTTPClient != nil {
 		return o.HTTPClient
 	}

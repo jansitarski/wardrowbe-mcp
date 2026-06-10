@@ -5,6 +5,9 @@ package mcpserver
 import (
 	"encoding/json"
 	"log/slog"
+	"net/http"
+	"sync"
+	"time"
 
 	"github.com/jansitarski/wardrowbe-mcp/internal/config"
 	"github.com/jansitarski/wardrowbe-mcp/internal/wardrowbe"
@@ -28,6 +31,18 @@ type Server struct {
 	mcp    *server.MCPServer
 	// sem bounds concurrent /mcp requests (buffered to cfg.MaxConcurrent).
 	sem chan struct{}
+	// imageTransport builds the HTTP transport for external image fetches.
+	// Production uses the SSRF-guarded transport; tests inject a plain one to
+	// reach a loopback test server. Injecting it here (rather than a package-level
+	// var) keeps the seam per-instance and free of data races under -race.
+	imageTransport func() *http.Transport
+
+	// readyMu guards a short-lived cache of the last backend readiness result so
+	// the unauthenticated /readyz endpoint can't be used to drive unbounded
+	// backend pings.
+	readyMu      sync.Mutex
+	readyChecked time.Time
+	readyErr     error
 }
 
 // New builds the MCP server and registers all tools.
@@ -40,11 +55,12 @@ func New(cfg config.Config, client *wardrowbe.Client, log *slog.Logger) *Server 
 	)
 
 	s := &Server{
-		cfg:    cfg,
-		client: client,
-		log:    log,
-		mcp:    mcpSrv,
-		sem:    make(chan struct{}, cfg.MaxConcurrent),
+		cfg:            cfg,
+		client:         client,
+		log:            log,
+		mcp:            mcpSrv,
+		sem:            make(chan struct{}, cfg.MaxConcurrent),
+		imageTransport: ssrfTransport,
 	}
 	s.registerTools()
 	return s

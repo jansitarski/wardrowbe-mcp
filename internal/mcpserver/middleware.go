@@ -16,6 +16,12 @@ const mcpPath = "/mcp"
 // readinessTimeout bounds the backend ping behind /readyz.
 const readinessTimeout = 3 * time.Second
 
+// readyCacheTTL bounds how often /readyz actually pings the backend. Because the
+// endpoint is unauthenticated, caching the result for a short window caps the
+// backend load any caller can drive through it to ~1 ping/TTL, while still being
+// fresh enough for a k8s readiness probe (which polls on the order of seconds).
+const readyCacheTTL = 1 * time.Second
+
 // HTTPHandler builds the full HTTP handler. Endpoints:
 //   - GET  /        liveness (static; process is up)
 //   - GET  /readyz  readiness (bounded backend ping)
@@ -38,7 +44,19 @@ func (s *Server) HTTPHandler() http.Handler {
 	mux.Handle(mcpPath, mcpHandler)
 	mux.HandleFunc("/readyz", s.readyHandler)
 	mux.HandleFunc("/", s.rootHandler)
-	return s.recoverPanic(mux)
+	return s.recoverPanic(securityHeaders(mux))
+}
+
+// securityHeaders sets conservative defaults on every response. The surface is a
+// JSON API, but a browser navigating directly to the origin would otherwise
+// render/cache the JSON; nosniff + no-store close that off as defense-in-depth.
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("Cache-Control", "no-store")
+		next.ServeHTTP(w, r)
+	})
 }
 
 // rootHandler answers liveness probes anonymously: it reports only that the
@@ -57,12 +75,34 @@ func (s *Server) rootHandler(w http.ResponseWriter, r *http.Request) {
 func (s *Server) readyHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), readinessTimeout)
 	defer cancel()
-	if err := s.client.Ping(ctx); err != nil {
-		s.log.Warn("readiness check failed", "error", err)
+	if err := s.readiness(ctx); err != nil {
 		writeJSON(w, http.StatusServiceUnavailable, `{"status":"unavailable"}`)
 		return
 	}
 	writeJSON(w, http.StatusOK, `{"status":"ready"}`)
+}
+
+// readiness returns the backend reachability result, pinging at most once per
+// readyCacheTTL and serving a cached result otherwise.
+func (s *Server) readiness(ctx context.Context) error {
+	s.readyMu.Lock()
+	if !s.readyChecked.IsZero() && time.Since(s.readyChecked) < readyCacheTTL {
+		err := s.readyErr
+		s.readyMu.Unlock()
+		return err
+	}
+	s.readyMu.Unlock()
+
+	err := s.client.Ping(ctx)
+	if err != nil {
+		s.log.Warn("readiness check failed", "error", err)
+	}
+
+	s.readyMu.Lock()
+	s.readyChecked = time.Now()
+	s.readyErr = err
+	s.readyMu.Unlock()
+	return err
 }
 
 // limitConcurrency caps in-flight /mcp requests via a buffered semaphore,

@@ -10,6 +10,22 @@ func TestLoadDefaultsForHTTPRequireAPIKey(t *testing.T) {
 	}
 }
 
+func TestInvalidIntEnvRejected(t *testing.T) {
+	t.Setenv("MCP_API_KEY", "k")
+	t.Setenv("MCP_MAX_CONCURRENT", "not-a-number")
+	_, err := Load([]string{"--transport", "http"})
+	if err == nil {
+		t.Fatal("expected error for non-integer MCP_MAX_CONCURRENT")
+	}
+}
+
+func TestInvalidLogLevelRejected(t *testing.T) {
+	_, err := Load([]string{"--api-key", "k", "--log-level", "debg"})
+	if err == nil {
+		t.Fatal("expected error for unknown log level")
+	}
+}
+
 func TestLoadFlagsOverrideEnv(t *testing.T) {
 	t.Setenv("MCP_BIND_PORT", "9999")
 	t.Setenv("MCP_API_KEY", "from-env")
