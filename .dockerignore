@@ -4,7 +4,14 @@
 .vscode
 *.test
 /out
+/dist
 /wardrowbe-mcp
+coverage.out
 docs
 README.md
 Makefile
+
+# Never pull secrets or local worktrees into the build context/cache
+.env
+.env.*
+.claude
