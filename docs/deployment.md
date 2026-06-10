@@ -46,7 +46,8 @@ The MCP server authenticates to the backend via `POST /api/v1/auth/sync`, which 
 backend exposes in dev mode. Set on the backend:
 
 - `DEBUG=true`
-- `SECRET_KEY=change-me-in-production`
+- `SECRET_KEY=<a strong random secret — generate with: openssl rand -hex 32>`
+  (this signs backend JWTs; never use a placeholder/default value, even in dev)
 
 For the web login form to appear, also set `DEV_MODE=true` on the **frontend** — this
 is separate from the backend `DEBUG` flag.

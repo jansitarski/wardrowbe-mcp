@@ -1,5 +1,11 @@
 # wardrowbe-mcp (Go)
 
+[![CI](https://github.com/jansitarski/wardrowbe-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/jansitarski/wardrowbe-mcp/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/jansitarski/wardrowbe-mcp?sort=semver)](https://github.com/jansitarski/wardrowbe-mcp/releases)
+[![Go Reference](https://img.shields.io/badge/go-1.25-00ADD8?logo=go)](https://go.dev/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Image](https://img.shields.io/badge/ghcr.io-wardrowbe--mcp-blue?logo=docker)](https://github.com/jansitarski/wardrowbe-mcp/pkgs/container/wardrowbe-mcp)
+
 A single static Go binary that exposes the
 [Wardrowbe](https://github.com/Anyesh/wardrowbe) wardrobe API as tools for Claude.
 Three capabilities make Claude a first-class part of the wardrobe:
@@ -15,7 +21,7 @@ Three capabilities make Claude a first-class part of the wardrobe:
 
 It runs over Streamable HTTP (or stdio) and is designed to sit in a homelab k3s
 cluster behind a Cloudflare Access MCP portal, used from Claude Desktop, Mobile, or
-Code. Current version: **0.3.0**.
+Code. Current version: **1.0.0**.
 
 ## Tools
 
@@ -48,7 +54,7 @@ Pull a pinned, prebuilt image (multi-arch, distroless, non-root):
 
 ```bash
 docker run --rm -p 8080:8080 -e MCP_API_KEY="$MCP_API_KEY" \
-  ghcr.io/jansitarski/wardrowbe-mcp:0.3.0 \
+  ghcr.io/jansitarski/wardrowbe-mcp:1.0.0 \
   --transport http --host 0.0.0.0 --port 8080 \
   --wardrowbe-url http://backend.wardrowbe.svc.cluster.local:8000 \
   --auth dev --external-id <web-user-external-id> --external-email <real-email>
@@ -71,7 +77,7 @@ release):
 
 ```bash
 helm install wardrowbe-mcp \
-  oci://ghcr.io/jansitarski/charts/wardrowbe-mcp --version 0.3.0 \
+  oci://ghcr.io/jansitarski/charts/wardrowbe-mcp --version 1.0.0 \
   -n wardrowbe --create-namespace \
   --set config.wardrowbeUrl=http://backend.wardrowbe.svc.cluster.local:8000 \
   --set apiKey.value="$MCP_API_KEY"
@@ -103,7 +109,20 @@ The most-used ones:
 | `--portal-resource-url` | — | Emits the RFC 9728 `resource_metadata` on `401`. |
 
 Run `wardrowbe-mcp --help` for the complete flag list, including the image and OIDC
-options.
+options. Every flag also has an `MCP_*` (or `WARDROWBE_URL`) environment variable;
+see [`.env.example`](.env.example) for the full list.
+
+## Troubleshooting
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| `401 Unauthorized` on `/mcp` | Missing/incorrect bearer | Send `Authorization: Bearer $MCP_API_KEY`; confirm the value matches `--api-key`/`MCP_API_KEY`. |
+| `503` on `/readyz` | Backend unreachable | Check `--wardrowbe-url` and that the backend is up; `/readyz` pings it. `/` (liveness) stays `200` regardless. |
+| `503` with `Retry-After` on `/mcp` | Concurrency cap hit | Raise `--max-concurrent`; the limiter sheds load instead of queuing. |
+| `413` / request rejected | Body exceeds cap | Raise `--max-body-mb` (default 40) for large base64 uploads. |
+| `create_item_from_url` refuses a URL | SSRF guard / non-public host | The URL must be `http(s)` and resolve to a public IP; private/loopback/link-local/multicast/NAT64 targets are blocked. |
+| Startup log warns about dev auth | `--auth dev` on http | Expected for a single user; set `--auth oidc` for real per-user identity. |
+| Process exits at startup with "invalid …" | Bad flag/env value | The config is validated up front — the message names the offending flag/env var. |
 
 ## Development
 

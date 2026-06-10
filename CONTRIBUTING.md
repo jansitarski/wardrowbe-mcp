@@ -65,9 +65,9 @@ independently of the app.
 # 1. bump the default in internal/mcpserver/server.go only if you want a sane
 #    `dev` fallback; the published version comes from the tag, not the source.
 # 2. tag the release commit on master and push the tag:
-git tag v0.3.0
-git push origin v0.3.0
-# 3. bump the image tag in the k8s-homelab deployment to match.
+git tag v1.0.0
+git push origin v1.0.0
+# 3. update your deployment (e.g. the Helm chart/image version) to the new tag.
 ```
 
 ## Reporting security issues
