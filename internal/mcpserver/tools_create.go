@@ -3,6 +3,7 @@ package mcpserver
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -15,11 +16,20 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
+// errNonPublicAddr is returned by the SSRF dialer when a URL resolves to a
+// non-public address. It is a sentinel (no IP in the message) so the tool layer
+// can surface the block reason without leaking the resolved internal IP.
+var errNonPublicAddr = errors.New("refusing to connect to a non-public address")
+
 const (
 	// maxImageBytes caps a fetched image (the backend ingress allows ~50 MB).
 	maxImageBytes = 20 << 20 // 20 MiB
 	// imageFetchTimeout bounds the whole external fetch.
 	imageFetchTimeout = 30 * time.Second
+	// maxImageRedirects bounds the redirect chain. Each hop is still re-checked
+	// by the SSRF dialer; this caps the chain length as defense-in-depth (a
+	// legitimate CDN may 302 once to a signed URL, but not many times).
+	maxImageRedirects = 5
 	// browserUA avoids naive hotlink/User-Agent blocks on retail CDNs.
 	browserUA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 " +
 		"(KHTML, like Gecko) Chrome/124.0 Safari/537.36 wardrowbe-mcp"
@@ -205,7 +215,16 @@ func fetchExternalImage(ctx context.Context, rawURL string) ([]byte, string, str
 		return nil, "", "", fmt.Errorf("only http(s) urls are allowed (got %q)", u.Scheme)
 	}
 
-	client := &http.Client{Timeout: imageFetchTimeout, Transport: imageFetchTransport()}
+	client := &http.Client{
+		Timeout:   imageFetchTimeout,
+		Transport: imageFetchTransport(),
+		CheckRedirect: func(_ *http.Request, via []*http.Request) error {
+			if len(via) >= maxImageRedirects {
+				return fmt.Errorf("stopped after %d redirects", maxImageRedirects)
+			}
+			return nil
+		},
+	}
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
 		return nil, "", "", err
@@ -215,7 +234,13 @@ func fetchExternalImage(ctx context.Context, rawURL string) ([]byte, string, str
 
 	resp, err := client.Do(httpReq)
 	if err != nil {
-		return nil, "", "", err
+		// The SSRF guard's refusal is a useful, safe signal — surface it. Any
+		// other transport error embeds the dialed host/TLS internals, so reduce
+		// it to a generic message (mirrors wardrowbe.Client.do).
+		if errors.Is(err, errNonPublicAddr) {
+			return nil, "", "", errNonPublicAddr
+		}
+		return nil, "", "", fmt.Errorf("could not reach image host")
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -274,7 +299,7 @@ func ssrfTransport() *http.Transport {
 			}
 			for _, ip := range ips {
 				if !isPublicIP(ip.IP) {
-					return nil, fmt.Errorf("refusing to connect to non-public address %s", ip.IP)
+					return nil, errNonPublicAddr
 				}
 			}
 			return dialer.DialContext(ctx, network, net.JoinHostPort(ips[0].IP.String(), port))

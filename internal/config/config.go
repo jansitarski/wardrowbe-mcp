@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -160,6 +161,11 @@ func (c Config) validate() error {
 		if c.OIDCIssuerURL == "" || c.OIDCClientID == "" || c.OIDCRefreshToken == "" {
 			return errors.New("oidc mode requires --oidc-issuer-url, --oidc-client-id and --oidc-refresh-token")
 		}
+		// The client secret and refresh token are sent to endpoints discovered
+		// from this issuer, so it must be https (and well-formed).
+		if u, err := url.Parse(c.OIDCIssuerURL); err != nil || u.Scheme != "https" || u.Host == "" {
+			return fmt.Errorf("invalid --oidc-issuer-url %q (must be an https URL)", c.OIDCIssuerURL)
+		}
 	default:
 		return fmt.Errorf("invalid --auth %q (want dev or oidc)", c.AuthMode)
 	}
@@ -181,6 +187,11 @@ func (c Config) validate() error {
 
 	if c.WardrowbeURL == "" {
 		return errors.New("--wardrowbe-url (WARDROWBE_URL) is required")
+	}
+	// Validate it now so a typo'd/wrong-scheme URL fails at startup with a clear
+	// message instead of an opaque error on the first backend request.
+	if u, err := url.Parse(c.WardrowbeURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return fmt.Errorf("invalid --wardrowbe-url %q (want an http(s) URL like http://host:8000)", c.WardrowbeURL)
 	}
 	if c.ImageMaxDim <= 0 {
 		return fmt.Errorf("invalid --image-max-dim %d", c.ImageMaxDim)
