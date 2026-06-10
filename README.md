@@ -61,6 +61,16 @@ docker run --rm -p 8080:8080 -e MCP_API_KEY="$MCP_API_KEY" \
   --auth dev --external-id <web-user-external-id> --external-email <real-email>
 ```
 
+Or download a prebuilt static binary for your architecture (`amd64`, `arm64`, or
+`armv7`) from the [latest release](https://github.com/jansitarski/wardrowbe-mcp/releases/latest)
+— verify it against the published `SHA256SUMS.txt`:
+
+```bash
+curl -fL -o wardrowbe-mcp \
+  https://github.com/jansitarski/wardrowbe-mcp/releases/download/v1.0.0/wardrowbe-mcp_1.0.0_linux_amd64
+chmod +x wardrowbe-mcp
+```
+
 Or build from source (requires Go 1.25.11+, the version pinned in `go.mod`):
 
 ```bash

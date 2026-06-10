@@ -1,7 +1,14 @@
 # Go
 /wardrowbe-mcp
 /out/
+/dist/
 *.test
+coverage.out
+
+# Secrets — copy .env.example to .env and fill in; never commit the real one
+.env
+.env.*
+!.env.example
 
 # Editor
 .idea/

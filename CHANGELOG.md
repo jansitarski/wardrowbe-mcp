@@ -26,6 +26,8 @@ First public release.
   never pod args.
 - Multi-arch (amd64/arm64) distroless non-root container image and an OCI Helm
   chart, both published per release.
+- Prebuilt static linux binaries (amd64, arm64, armv7) with `SHA256SUMS.txt`
+  attached to every GitHub Release; a `--version` flag reports the build version.
 - CI: gofmt/vet/build, race + coverage unit tests, end-to-end integration test of
   every tool, helm lint/template, plus `govulncheck` and `gosec` security scans.
   GitHub Actions pinned to commit SHAs with least-privilege, per-job permissions.
