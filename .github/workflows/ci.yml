@@ -5,18 +5,20 @@ on:
     branches: [master]
   pull_request:
 
-permissions:
-  contents: read
+# Default to no permissions; each job opts in to exactly what it needs.
+permissions: {}
 
 jobs:
   build-test:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version: '1.25'
+          go-version: '1.25.11'
           cache: true
 
       - name: Verify formatting
@@ -40,12 +42,31 @@ jobs:
       - name: Integration test (every tool, end-to-end)
         run: go test -tags integration -race ./internal/mcpserver/
 
+  security:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: govulncheck (known stdlib/dep vulnerabilities)
+        uses: golang/govulncheck-action@b625fbe08f3bccbe446d94fbf87fcc875a4f50ee # v1
+        with:
+          go-version-input: '1.25.11'
+
+      - name: gosec (static security analysis)
+        uses: securego/gosec@d4617f51baf75f4f809066386a4f9d27b3ac3e46 # v2.27.1
+        with:
+          args: ./...
+
   helm:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
 
       - name: Lint chart
         run: |

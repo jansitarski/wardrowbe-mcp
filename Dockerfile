@@ -3,7 +3,7 @@
 # Build on the native builder arch and cross-compile to the target arch via
 # Go's GOOS/GOARCH (set from buildx's TARGET* args). CGO is disabled, so the
 # compile step needs no QEMU — only the final image layer is per-platform.
-FROM --platform=$BUILDPLATFORM golang:1.25 AS build
+FROM --platform=$BUILDPLATFORM golang:1.25.11 AS build
 ARG TARGETOS
 ARG TARGETARCH
 ARG VERSION=dev
@@ -17,6 +17,7 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath \
 
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/wardrowbe-mcp /wardrowbe-mcp
+COPY --from=build /src/LICENSE /LICENSE
 EXPOSE 8080
 USER nonroot:nonroot
 ENTRYPOINT ["/wardrowbe-mcp"]
