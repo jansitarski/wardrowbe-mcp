@@ -51,25 +51,33 @@ spec:
             {{- toYaml . | nindent 12 }}
           {{- end }}
           args:
-            - --transport={{ .Values.config.transport }}
-            - --host={{ .Values.config.host }}
-            - --port={{ .Values.config.port }}
-            - --wardrowbe-url={{ required "config.wardrowbeUrl is required (the Wardrowbe backend base URL)" .Values.config.wardrowbeUrl }}
-            - --auth={{ .Values.config.auth }}
+            # Each arg is quoted as a single token so a value containing a space
+            # or newline can't split the rendered YAML array into extra entries.
+            - {{ printf "--transport=%s" (toString .Values.config.transport) | quote }}
+            - {{ printf "--host=%s" (toString .Values.config.host) | quote }}
+            - {{ printf "--port=%v" .Values.config.port | quote }}
+            - {{ printf "--wardrowbe-url=%s" (required "config.wardrowbeUrl is required (the Wardrowbe backend base URL)" .Values.config.wardrowbeUrl) | quote }}
+            - {{ printf "--auth=%s" (toString .Values.config.auth) | quote }}
             {{- with .Values.config.externalId }}
-            - --external-id={{ . }}
+            - {{ printf "--external-id=%s" (toString .) | quote }}
             {{- end }}
             {{- with .Values.config.externalEmail }}
-            - --external-email={{ . }}
+            - {{ printf "--external-email=%s" (toString .) | quote }}
+            {{- end }}
+            {{- with .Values.oidc.issuerUrl }}
+            - {{ printf "--oidc-issuer-url=%s" (toString .) | quote }}
+            {{- end }}
+            {{- with .Values.oidc.clientId }}
+            - {{ printf "--oidc-client-id=%s" (toString .) | quote }}
             {{- end }}
             {{- with .Values.config.portalResourceUrl }}
-            - --portal-resource-url={{ . }}
+            - {{ printf "--portal-resource-url=%s" (toString .) | quote }}
             {{- end }}
             {{- with .Values.config.maxConcurrent }}
-            - --max-concurrent={{ . }}
+            - {{ printf "--max-concurrent=%v" . | quote }}
             {{- end }}
             {{- with .Values.config.maxBodyMb }}
-            - --max-body-mb={{ . }}
+            - {{ printf "--max-body-mb=%v" . | quote }}
             {{- end }}
             {{- range .Values.config.extraArgs }}
             - {{ . | quote }}
@@ -83,6 +91,22 @@ spec:
                   # optional so a stdio/keyless deploy still starts; the http
                   # path is gated by the fail() guard at the top of this file.
                   optional: true
+            {{- with .Values.oidc.existingSecret }}
+            # OIDC secret material via env (never pod args). optional:true so a
+            # partially-configured Secret doesn't block pod start.
+            - name: MCP_OIDC_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ . }}
+                  key: {{ $.Values.oidc.clientSecretKey }}
+                  optional: true
+            - name: MCP_OIDC_REFRESH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ . }}
+                  key: {{ $.Values.oidc.refreshTokenKey }}
+                  optional: true
+            {{- end }}
             {{- range $k, $v := .Values.env }}
             - name: {{ $k }}
               value: {{ $v | quote }}

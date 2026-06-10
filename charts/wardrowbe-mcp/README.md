@@ -11,7 +11,7 @@ chart version always matches an image that exists.
 
 ```bash
 helm install wardrowbe-mcp \
-  oci://ghcr.io/jansitarski/charts/wardrowbe-mcp --version 0.3.0 \
+  oci://ghcr.io/jansitarski/charts/wardrowbe-mcp --version 1.0.0 \
   --namespace wardrowbe --create-namespace \
   --set config.wardrowbeUrl=http://backend.wardrowbe.svc.cluster.local:8000 \
   --set apiKey.value="$MCP_API_KEY"
@@ -21,7 +21,7 @@ Or with a values file:
 
 ```bash
 helm install wardrowbe-mcp \
-  oci://ghcr.io/jansitarski/charts/wardrowbe-mcp --version 0.3.0 \
+  oci://ghcr.io/jansitarski/charts/wardrowbe-mcp --version 1.0.0 \
   -n wardrowbe --create-namespace -f my-values.yaml
 ```
 
@@ -35,8 +35,8 @@ set `imagePullSecrets` to a Secret that can pull it.
 config:
   wardrowbeUrl: http://backend.wardrowbe.svc.cluster.local:8000
   auth: dev
-  externalId: your-user-id
-  externalEmail: user@example.com
+  externalId: you-example-com
+  externalEmail: you@example.com
 apiKey:
   # Prefer an existing (e.g. SOPS-managed) Secret over an inline value:
   existingSecret: wardrowbe-mcp-secrets
@@ -56,6 +56,33 @@ one of two ways:
 - **`apiKey.existingSecret`** — reference a Secret you manage yourself (SOPS,
   Sealed Secrets, External Secrets, …). The key defaults to `mcp-api-key`
   (`apiKey.key`). This is the recommended path for GitOps.
+
+## OIDC auth
+
+Set `config.auth=oidc` to send a real per-user identity (instead of the fixed
+dev identity) to the backend. The issuer URL and client ID are non-secret and are
+passed as flags (`oidc.issuerUrl`, `oidc.clientId`). The **client secret and
+refresh token are secret**, so the chart wires them from a Secret as environment
+variables — never as pod args, which are visible via `kubectl get pod -o yaml`,
+in etcd, and in audit logs:
+
+```yaml
+config:
+  auth: oidc
+oidc:
+  issuerUrl: https://issuer.example.com
+  clientId: my-client-id
+  existingSecret: wardrowbe-mcp-oidc   # holds the secret material
+  # clientSecretKey / refreshTokenKey default to oidc-client-secret / oidc-refresh-token
+```
+
+Create the Secret out-of-band (SOPS / Sealed Secrets / External Secrets):
+
+```bash
+kubectl -n wardrowbe create secret generic wardrowbe-mcp-oidc \
+  --from-literal=oidc-client-secret="$OIDC_CLIENT_SECRET" \
+  --from-literal=oidc-refresh-token="$OIDC_REFRESH_TOKEN"
+```
 
 ## Values
 
@@ -77,6 +104,11 @@ one of two ways:
 | `config.maxConcurrent` | `""` | In-flight `/mcp` cap (empty → binary default 16). |
 | `config.maxBodyMb` | `""` | Inbound `/mcp` body cap MB (empty → default 40). |
 | `config.extraArgs` | `[]` | Additional raw flags. |
+| `oidc.issuerUrl` | `""` | OIDC issuer URL (flag; `config.auth=oidc`). |
+| `oidc.clientId` | `""` | OIDC client ID (flag; `config.auth=oidc`). |
+| `oidc.existingSecret` | `""` | Secret holding the OIDC client secret / refresh token (env, not args). |
+| `oidc.clientSecretKey` | `oidc-client-secret` | Secret key for the client secret. |
+| `oidc.refreshTokenKey` | `oidc-refresh-token` | Secret key for the refresh token. |
 | `apiKey.value` | `""` | Inline bearer key; chart creates a Secret. |
 | `apiKey.existingSecret` | `""` | Reference an existing Secret instead. |
 | `apiKey.key` | `mcp-api-key` | Secret key holding the bearer. |
@@ -107,7 +139,7 @@ spec:
   interval: 1h
   url: oci://ghcr.io/jansitarski/charts/wardrowbe-mcp
   ref:
-    tag: "0.3.0"
+    tag: "1.0.0"
 ---
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
