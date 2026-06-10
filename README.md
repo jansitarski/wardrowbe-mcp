@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/jansitarski/wardrowbe-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/jansitarski/wardrowbe-mcp/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/jansitarski/wardrowbe-mcp?sort=semver)](https://github.com/jansitarski/wardrowbe-mcp/releases)
-[![Go Reference](https://img.shields.io/badge/go-1.25-00ADD8?logo=go)](https://go.dev/)
+[![Go Reference](https://img.shields.io/badge/go-1.25.11-00ADD8?logo=go)](https://go.dev/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Image](https://img.shields.io/badge/ghcr.io-wardrowbe--mcp-blue?logo=docker)](https://github.com/jansitarski/wardrowbe-mcp/pkgs/container/wardrowbe-mcp)
 
@@ -61,7 +61,7 @@ docker run --rm -p 8080:8080 -e MCP_API_KEY="$MCP_API_KEY" \
   --auth dev --external-id <web-user-external-id> --external-email <real-email>
 ```
 
-Or build from source:
+Or build from source (requires Go 1.25.11+, the version pinned in `go.mod`):
 
 ```bash
 go build -o wardrowbe-mcp ./cmd/wardrowbe-mcp

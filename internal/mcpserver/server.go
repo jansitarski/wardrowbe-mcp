@@ -23,6 +23,10 @@ const serverName = "wardrowbe-mcp"
 // (see the Dockerfile and Makefile); unbuilt/dev builds report "dev".
 var serverVersion = "dev"
 
+// Version returns the build version reported to MCP clients (see serverVersion),
+// so the command layer can answer `--version` with the same value.
+func Version() string { return serverVersion }
+
 // Server bundles the runtime dependencies shared by every tool handler.
 type Server struct {
 	cfg    config.Config

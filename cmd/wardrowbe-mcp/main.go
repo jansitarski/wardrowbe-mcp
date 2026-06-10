@@ -26,6 +26,14 @@ func main() {
 }
 
 func run(args []string) error {
+	// Answer --version before config parsing so it works without --api-key etc.
+	for _, a := range args {
+		if a == "--version" || a == "-version" {
+			fmt.Println(mcpserver.Version())
+			return nil
+		}
+	}
+
 	cfg, err := config.Load(args)
 	if err != nil {
 		return err
