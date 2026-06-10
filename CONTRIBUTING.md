@@ -70,6 +70,31 @@ git push origin v1.0.0
 # 3. update your deployment (e.g. the Helm chart/image version) to the new tag.
 ```
 
+### Package visibility (one-time, required for public use)
+
+The image and chart are pushed to GHCR as **container** packages. GHCR creates
+new packages **private** by default, and GitHub provides **no API** to change a
+container package's visibility — it is a one-time manual step per package, done
+once after the first release of each:
+
+- Image: **Package settings → Danger Zone → Change visibility → Public**
+  — `https://github.com/users/jansitarski/packages/container/wardrowbe-mcp/settings`
+- Chart: same, at
+  `https://github.com/users/jansitarski/packages/container/charts%2Fwardrowbe-mcp/settings`
+
+Until both are Public, the anonymous `docker run` / `helm install` commands in the
+README fail with `denied`; users would need an `imagePullSecrets` token. Verify
+after flipping:
+
+```bash
+gh api users/jansitarski/packages/container/wardrowbe-mcp --jq .visibility
+gh api users/jansitarski/packages/container/charts%2Fwardrowbe-mcp --jq .visibility
+# both should print: public
+```
+
+Also link each package to this repository (from the package page) so it inherits
+the repo README and access settings.
+
 ## Reporting security issues
 
 Please do not file public issues for vulnerabilities — see

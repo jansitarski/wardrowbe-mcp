@@ -26,8 +26,9 @@ helm install wardrowbe-mcp \
 ```
 
 The chart's `appVersion` pins the image tag by default, so the chart version and
-the running binary stay in lock-step. The GHCR package is private by default —
-set `imagePullSecrets` to a Secret that can pull it.
+the running binary stay in lock-step. The published image and chart are public on
+GHCR, so no pull secret is needed; set `imagePullSecrets` only if you fork and host
+a private package.
 
 ## Minimal `values.yaml`
 

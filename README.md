@@ -50,7 +50,8 @@ error bodies are logged server-side only — never surfaced to the caller. Wire 
 
 ## Quick start
 
-Pull a pinned, prebuilt image (multi-arch, distroless, non-root):
+Pull a pinned, prebuilt image (multi-arch, distroless, non-root) — the image and
+Helm chart are published **public** on GHCR, so no auth is needed to pull them:
 
 ```bash
 docker run --rm -p 8080:8080 -e MCP_API_KEY="$MCP_API_KEY" \
