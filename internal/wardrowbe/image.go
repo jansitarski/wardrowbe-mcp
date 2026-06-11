@@ -124,8 +124,10 @@ func (c *Client) fetchImageBytes(ctx context.Context, imageURL string, authed bo
 			return nil, "", fmt.Errorf("fetch image: request failed")
 		}
 		if authed && resp.StatusCode == http.StatusUnauthorized && attempt == 0 {
-			io.Copy(io.Discard, io.LimitReader(resp.Body, 512)) //nolint:errcheck
-			resp.Body.Close()
+			// Drain a little of the body so the connection can be reused, then
+			// retry with a fresh token; the drain/close errors are irrelevant.
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 512))
+			_ = resp.Body.Close()
 			c.log.Debug("image fetch 401, re-syncing token")
 			badToken = token
 			continue
