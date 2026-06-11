@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/jansitarski/wardrowbe-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/jansitarski/wardrowbe-mcp/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/jansitarski/wardrowbe-mcp?sort=semver)](https://github.com/jansitarski/wardrowbe-mcp/releases)
-[![Go Reference](https://img.shields.io/badge/go-1.25.11-00ADD8?logo=go)](https://go.dev/)
+[![Go Version](https://img.shields.io/badge/go-1.25.11-00ADD8?logo=go)](go.mod)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Image](https://img.shields.io/badge/ghcr.io-wardrowbe--mcp-blue?logo=docker)](https://github.com/jansitarski/wardrowbe-mcp/pkgs/container/wardrowbe-mcp)
 
@@ -14,10 +14,10 @@ Three capabilities make Claude a first-class part of the wardrobe:
   own vision tags and styles them instead of a small in-cluster model.
 - **Tag / description write-back** — lets Claude save accurate attributes back to
   Wardrowbe, so it can correct what the auto-tagger got wrong.
-- **Item creation** — lets Claude add a garment from an image: `create_item_from_url`
-  fetches a public image URL (SSRF-guarded), and `create_item_from_base64` takes an
-  inline image for local files. The backend stores and auto-tags it; Claude can then
-  refine the tags via write-back.
+- **Item creation** — lets Claude add a garment from an image:
+  `wardrowbe_create_item_from_url` fetches a public image URL (SSRF-guarded), and
+  `wardrowbe_create_item_from_base64` takes an inline image for local files. The
+  backend stores and auto-tags it; Claude can then refine the tags via write-back.
 
 It runs over Streamable HTTP (or stdio) and is designed to sit in a homelab k3s
 cluster behind a Cloudflare Access MCP portal, used from Claude Desktop, Mobile, or
@@ -25,11 +25,14 @@ Code. Current version: **1.0.0**.
 
 ## Tools
 
-31 tools covering the wardrobe API: browsing and analytics (`list_items`, `get_item`,
-`get_wardrobe_summary`, …), wear/wash/archive lifecycle, outfit suggestion and
-feedback, the image-view tools (`get_item_image`, `get_outfit_images`), write-back
-(`update_item`, `set_item_tags`, `set_item_description`), and creation
-(`create_outfit`, `create_item_from_url`, `create_item_from_base64`, `delete_outfit`).
+32 tools covering the wardrobe API, all prefixed `wardrowbe_` so they stay unambiguous
+in MCP hosts that aggregate several servers: browsing and analytics
+(`wardrowbe_list_items`, `wardrowbe_get_item`, `wardrowbe_get_wardrobe_summary`, …),
+wear/wash/archive lifecycle, outfit suggestion and feedback, the image-view tools
+(`wardrowbe_get_item_image`, `wardrowbe_get_outfit_images`), write-back
+(`wardrowbe_update_item`, `wardrowbe_set_item_tags`, `wardrowbe_set_item_description`),
+and creation (`wardrowbe_create_outfit`, `wardrowbe_create_item_from_url`,
+`wardrowbe_create_item_from_base64`, `wardrowbe_delete_outfit`).
 
 Each tool maps to a Wardrowbe backend endpoint; the definitions live in
 `internal/mcpserver/tools_*.go`.
@@ -76,11 +79,11 @@ Or build from source (requires Go 1.25.11+, the version pinned in `go.mod`):
 ```bash
 go build -o wardrowbe-mcp ./cmd/wardrowbe-mcp
 
-./wardrowbe-mcp \
+# Pass the key via the environment, not argv — it would show up in `ps` output.
+MCP_API_KEY="$MCP_API_KEY" ./wardrowbe-mcp \
   --transport http --host 0.0.0.0 --port 8080 \
   --wardrowbe-url http://backend.wardrowbe.svc.cluster.local:8000 \
-  --auth dev --external-id <web-user-external-id> --external-email <real-email> \
-  --api-key "$MCP_API_KEY"
+  --auth dev --external-id <web-user-external-id> --external-email <real-email>
 ```
 
 Or deploy to Kubernetes with the Helm chart (published as an OCI artifact per
@@ -111,17 +114,20 @@ The most-used ones:
 | Flag | Default | Purpose |
 |---|---|---|
 | `--transport` | `http` | `http` (Streamable) or `stdio`. |
-| `--wardrowbe-url` | — | Backend base URL (no `/api/v1`). |
-| `--api-key` | — | Incoming bearer key; **required for http**. |
+| `--wardrowbe-url` | — | Backend base URL (no `/api/v1`). **Required.** |
+| `--api-key` | — | Incoming bearer key; **required for http**. Prefer `MCP_API_KEY` env over the flag (argv is visible in `ps`). |
 | `--auth` | `dev` | `dev` or `oidc`. |
 | `--external-id` / `--external-email` | — | Dev identity sent to `/auth/sync`. |
+| `--oidc-token-endpoint` | — | Optional https token-endpoint override (skips OIDC discovery). |
 | `--max-concurrent` | `16` | In-flight `/mcp` request cap. |
 | `--max-body-mb` | `40` | Inbound `/mcp` body cap. |
 | `--portal-resource-url` | — | Emits the RFC 9728 `resource_metadata` on `401`. |
 
 Run `wardrowbe-mcp --help` for the complete flag list, including the image and OIDC
 options. Every flag also has an `MCP_*` (or `WARDROWBE_URL`) environment variable;
-see [`.env.example`](.env.example) for the full list.
+see [`.env.example`](.env.example) for the full list. Secrets (`MCP_API_KEY`,
+`MCP_OIDC_CLIENT_SECRET`, `MCP_OIDC_REFRESH_TOKEN`) are never echoed in `--help`
+output or flag-error usage text.
 
 ## Troubleshooting
 
@@ -131,7 +137,8 @@ see [`.env.example`](.env.example) for the full list.
 | `503` on `/readyz` | Backend unreachable | Check `--wardrowbe-url` and that the backend is up; `/readyz` pings it. `/` (liveness) stays `200` regardless. |
 | `503` with `Retry-After` on `/mcp` | Concurrency cap hit | Raise `--max-concurrent`; the limiter sheds load instead of queuing. |
 | `413` / request rejected | Body exceeds cap | Raise `--max-body-mb` (default 40) for large base64 uploads. |
-| `create_item_from_url` refuses a URL | SSRF guard / non-public host | The URL must be `http(s)` and resolve to a public IP; private/loopback/link-local/multicast/NAT64 targets are blocked. |
+| `wardrowbe_create_item_from_url` refuses a URL | SSRF guard / non-public host | The URL must be `http(s)` and resolve to a public IP; private/loopback/link-local/multicast/NAT64 targets are blocked. |
+| OIDC refresh fails with `invalid_grant` | Refresh token expired/rotated out | Issue a fresh refresh token; the server follows rotation automatically once running. |
 | Startup log warns about dev auth | `--auth dev` on http | Expected for a single user; set `--auth oidc` for real per-user identity. |
 | Process exits at startup with "invalid …" | Bad flag/env value | The config is validated up front — the message names the offending flag/env var. |
 

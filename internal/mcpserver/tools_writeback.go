@@ -8,8 +8,12 @@ import (
 )
 
 func (s *Server) registerWritebackTools() {
-	s.add(mcp.NewTool("update_item",
-		mcp.WithDescription("Update an item's attributes (PATCH /items/{id}). Only provided fields change."),
+	s.add(mcp.NewTool("wardrowbe_update_item",
+		mcp.WithDescription("Update an item's attributes (PATCH /items/{id}). Only provided fields "+
+			"change; empty strings/arrays are ignored, so fields cannot be cleared here (use "+
+			"wardrowbe_set_item_description to clear the description)."),
+		mcp.WithDestructiveHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(true),
 		mcp.WithString("item_id", mcp.Required(), mcp.Description("Item id.")),
 		mcp.WithString("type", mcp.Description("Item type (e.g. shirt, trousers).")),
 		mcp.WithString("subtype", mcp.Description("Item subtype.")),
@@ -22,9 +26,11 @@ func (s *Server) registerWritebackTools() {
 		mcp.WithInteger("wash_interval", mcp.Description("Wears between washes."), mcp.Min(1)),
 	), s.handleUpdateItem)
 
-	s.add(mcp.NewTool("set_item_tags",
+	s.add(mcp.NewTool("wardrowbe_set_item_tags",
 		mcp.WithDescription("Set an item's structured attribute tags (PATCH /items/{id} tags). "+
 			"Use after viewing the garment image to record accurate attributes."),
+		mcp.WithDestructiveHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(true),
 		mcp.WithString("item_id", mcp.Required(), mcp.Description("Item id.")),
 		mcp.WithArray("colors", mcp.Description("Colors."), mcp.WithStringItems()),
 		mcp.WithString("primary_color", mcp.Description("Primary color.")),
@@ -36,17 +42,21 @@ func (s *Server) registerWritebackTools() {
 		mcp.WithString("fit", mcp.Description("Fit (e.g. slim, regular, relaxed).")),
 	), s.handleSetItemTags)
 
-	s.add(mcp.NewTool("set_item_description",
-		mcp.WithDescription("Set an item's free-text description (PATCH /items/{id} notes)."),
+	s.add(mcp.NewTool("wardrowbe_set_item_description",
+		mcp.WithDescription("Set an item's free-text description (same field wardrowbe_update_item "+
+			"calls notes). Unlike wardrowbe_update_item, an empty string is accepted and clears the "+
+			"description."),
+		mcp.WithDestructiveHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(true),
 		mcp.WithString("item_id", mcp.Required(), mcp.Description("Item id.")),
-		mcp.WithString("description", mcp.Required(), mcp.Description("Description text.")),
+		mcp.WithString("description", mcp.Required(), mcp.Description("Description text (empty clears it).")),
 	), s.handleSetItemDescription)
 }
 
 func (s *Server) handleUpdateItem(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	itemID, err := req.RequireString("item_id")
-	if err != nil {
-		return mcp.NewToolResultError("item_id is required"), nil
+	itemID, errRes := requireID(req, "item_id")
+	if errRes != nil {
+		return errRes, nil
 	}
 
 	args := req.GetArguments()
@@ -57,15 +67,18 @@ func (s *Server) handleUpdateItem(ctx context.Context, req mcp.CallToolRequest) 
 	setIfPresent(args, "brand", func(v string) { patch.Brand = &v })
 	setIfPresent(args, "notes", func(v string) { patch.Notes = &v })
 	setIfPresent(args, "primary_color", func(v string) { patch.PrimaryColor = &v })
-	if _, ok := args["favorite"]; ok {
-		fav := req.GetBool("favorite", false)
+	if fav, present, errRes := argBool(req, "favorite"); errRes != nil {
+		return errRes, nil
+	} else if present {
 		patch.Favorite = &fav
 	}
-	if _, ok := args["wash_interval"]; ok {
-		wi := req.GetInt("wash_interval", 0)
-		if wi > 0 {
-			patch.WashInterval = &wi
+	if wi, present, errRes := argInt(req, "wash_interval"); errRes != nil {
+		return errRes, nil
+	} else if present {
+		if wi < 1 {
+			return mcp.NewToolResultErrorf("wash_interval must be >= 1 (got %d)", wi), nil
 		}
+		patch.WashInterval = &wi
 	}
 	if colors := req.GetStringSlice("colors", nil); len(colors) > 0 {
 		patch.Colors = colors
@@ -83,9 +96,9 @@ func (s *Server) handleUpdateItem(ctx context.Context, req mcp.CallToolRequest) 
 }
 
 func (s *Server) handleSetItemTags(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	itemID, err := req.RequireString("item_id")
-	if err != nil {
-		return mcp.NewToolResultError("item_id is required"), nil
+	itemID, errRes := requireID(req, "item_id")
+	if errRes != nil {
+		return errRes, nil
 	}
 
 	args := req.GetArguments()
@@ -122,9 +135,9 @@ func (s *Server) handleSetItemTags(ctx context.Context, req mcp.CallToolRequest)
 }
 
 func (s *Server) handleSetItemDescription(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	itemID, err := req.RequireString("item_id")
-	if err != nil {
-		return mcp.NewToolResultError("item_id is required"), nil
+	itemID, errRes := requireID(req, "item_id")
+	if errRes != nil {
+		return errRes, nil
 	}
 	desc, err := req.RequireString("description")
 	if err != nil {

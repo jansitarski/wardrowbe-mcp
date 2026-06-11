@@ -2,7 +2,9 @@ package mcpserver
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -82,8 +84,14 @@ func (s *Server) readyHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, `{"status":"ready"}`)
 }
 
+// errReadyPending is returned (as "not ready") to /readyz callers that arrive
+// while the very first backend ping is still in flight.
+var errReadyPending = errors.New("readiness not yet established")
+
 // readiness returns the backend reachability result, pinging at most once per
-// readyCacheTTL and serving a cached result otherwise.
+// readyCacheTTL and serving a cached result otherwise. At most one ping runs
+// at a time: concurrent callers get the last known result instead of each
+// launching their own backend request.
 func (s *Server) readiness(ctx context.Context) error {
 	s.readyMu.Lock()
 	if !s.readyChecked.IsZero() && time.Since(s.readyChecked) < readyCacheTTL {
@@ -91,6 +99,15 @@ func (s *Server) readiness(ctx context.Context) error {
 		s.readyMu.Unlock()
 		return err
 	}
+	if s.readyInflight {
+		err := s.readyErr
+		if s.readyChecked.IsZero() {
+			err = errReadyPending
+		}
+		s.readyMu.Unlock()
+		return err
+	}
+	s.readyInflight = true
 	s.readyMu.Unlock()
 
 	err := s.client.Ping(ctx)
@@ -101,6 +118,7 @@ func (s *Server) readiness(ctx context.Context) error {
 	s.readyMu.Lock()
 	s.readyChecked = time.Now()
 	s.readyErr = err
+	s.readyInflight = false
 	s.readyMu.Unlock()
 	return err
 }
@@ -123,17 +141,50 @@ func (s *Server) limitConcurrency(next http.Handler) http.Handler {
 }
 
 // recoverPanic turns a panic in any handler/middleware into a logged 500 rather
-// than a silently dropped connection.
+// than a silently dropped connection. http.ErrAbortHandler is re-panicked — it
+// is net/http's sentinel for deliberately aborting a response — and once a
+// response has started, no second status line/body is written on top of it.
 func (s *Server) recoverPanic(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tw := &trackingWriter{ResponseWriter: w}
 		defer func() {
 			if rec := recover(); rec != nil {
+				if err, ok := rec.(error); ok && errors.Is(err, http.ErrAbortHandler) {
+					panic(rec)
+				}
 				s.log.Error("panic in http handler", "panic", rec, "path", r.URL.Path)
-				writeJSON(w, http.StatusInternalServerError, `{"error":"internal"}`)
+				if !tw.wrote {
+					writeJSON(w, http.StatusInternalServerError, `{"error":"internal"}`)
+				}
 			}
 		}()
-		next.ServeHTTP(w, r)
+		next.ServeHTTP(tw, r)
 	})
+}
+
+// trackingWriter records whether the response has started, so the panic
+// recovery doesn't write a second header/body mid-stream. Flush is forwarded
+// for the streaming (SSE) responses the MCP transport uses.
+type trackingWriter struct {
+	http.ResponseWriter
+	wrote bool
+}
+
+func (w *trackingWriter) WriteHeader(code int) {
+	w.wrote = true
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *trackingWriter) Write(b []byte) (int, error) {
+	w.wrote = true
+	return w.ResponseWriter.Write(b)
+}
+
+func (w *trackingWriter) Flush() {
+	w.wrote = true
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
 }
 
 func writeJSON(w http.ResponseWriter, status int, body string) {
@@ -157,12 +208,16 @@ func (s *Server) bearerGate(next http.Handler) http.Handler {
 func (s *Server) authorized(r *http.Request) bool {
 	const prefix = "Bearer "
 	header := r.Header.Get("Authorization")
-	if !strings.HasPrefix(header, prefix) {
+	// RFC 7235: the auth scheme is case-insensitive ("bearer x" is valid).
+	if len(header) < len(prefix) || !strings.EqualFold(header[:len(prefix)], prefix) {
 		return false
 	}
 	got := strings.TrimSpace(header[len(prefix):])
-	// constant-time compare to avoid leaking the key via timing.
-	return subtle.ConstantTimeCompare([]byte(got), []byte(s.cfg.APIKey)) == 1
+	// Compare SHA-256 digests in constant time: ConstantTimeCompare alone
+	// short-circuits on length mismatch, leaking the key length. The
+	// configured key's digest is precomputed in New.
+	gotSum := sha256.Sum256([]byte(got))
+	return subtle.ConstantTimeCompare(gotSum[:], s.apiKeyHash[:]) == 1
 }
 
 func (s *Server) writeUnauthorized(w http.ResponseWriter) {

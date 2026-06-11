@@ -17,7 +17,8 @@ fullnameOverride: ""
 
 # Server configuration — rendered into the binary's CLI flags.
 config:
-  # http (Streamable HTTP) or stdio. A k8s deployment should use http.
+  # Must be "http" (Streamable HTTP). The binary also supports stdio, but a
+  # Deployment attaches nothing to stdin, so the chart refuses to render it.
   transport: http
   host: 0.0.0.0
   port: 8080
@@ -98,6 +99,13 @@ securityContext:
 serviceAccount:
   create: false
   name: ""
+
+# The server never talks to the Kubernetes API; don't mount a token for it.
+automountServiceAccountToken: false
+
+# Should exceed the binary's 15s drain window so a SIGTERM shutdown can finish
+# cleanly before the kubelet sends SIGKILL.
+terminationGracePeriodSeconds: 30
 
 nodeSelector: {}
 tolerations: []

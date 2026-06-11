@@ -47,7 +47,7 @@ func TestIsPublicIP(t *testing.T) {
 
 func TestFetchExternalImageRejectsNonHTTP(t *testing.T) {
 	for _, u := range []string{"file:///etc/passwd", "ftp://host/x.jpg", "data:image/png;base64,xx"} {
-		if _, _, _, err := fetchExternalImage(context.Background(), u, ssrfTransport); err == nil {
+		if _, _, _, err := fetchExternalImage(context.Background(), u, ssrfTransport()); err == nil {
 			t.Errorf("expected rejection for %q", u)
 		}
 	}
@@ -61,7 +61,7 @@ func TestFetchExternalImageRejectsLoopbackOrNonImage(t *testing.T) {
 	defer srv.Close()
 	// httptest listens on 127.0.0.1 — the SSRF guard refuses the dial, which is
 	// itself a correct failure (and also exercises that path).
-	if _, _, _, err := fetchExternalImage(context.Background(), srv.URL, ssrfTransport); err == nil {
+	if _, _, _, err := fetchExternalImage(context.Background(), srv.URL, ssrfTransport()); err == nil {
 		t.Error("expected error fetching a loopback / non-image host")
 	}
 }
@@ -69,7 +69,7 @@ func TestFetchExternalImageRejectsLoopbackOrNonImage(t *testing.T) {
 func TestFetchExternalImageRedirectGuards(t *testing.T) {
 	// A plain transport lets the loopback dial succeed so CheckRedirect runs;
 	// the SSRF dialer would otherwise refuse the loopback hop first.
-	plain := func() *http.Transport { return &http.Transport{} }
+	plain := &http.Transport{}
 
 	// A redirect to a non-http(s) scheme must be refused per hop.
 	badScheme := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -41,10 +41,6 @@ config:
 apiKey:
   # Prefer an existing (e.g. SOPS-managed) Secret over an inline value:
   existingSecret: wardrowbe-mcp-secrets
-imagePullSecrets:
-  - name: ghcr-pull
-nodeSelector:
-  kubernetes.io/arch: amd64
 ```
 
 ## The API key
@@ -53,10 +49,13 @@ The http transport requires an incoming bearer key (`MCP_API_KEY`). Provide it
 one of two ways:
 
 - **`apiKey.value`** — the chart creates a Secret holding it. Convenient for
-  `--set`, but keep it out of committed values files.
+  `--set`, but keep it out of committed values files. A pod-template checksum
+  annotation rolls the Deployment automatically when you rotate this value.
 - **`apiKey.existingSecret`** — reference a Secret you manage yourself (SOPS,
   Sealed Secrets, External Secrets, …). The key defaults to `mcp-api-key`
-  (`apiKey.key`). This is the recommended path for GitOps.
+  (`apiKey.key`). This is the recommended path for GitOps. Note: after rotating
+  the key in your external Secret, run `kubectl rollout restart` (or use a
+  controller like Reloader) — pods resolve the env var only at start.
 
 ## OIDC auth
 
@@ -89,12 +88,14 @@ kubectl -n wardrowbe create secret generic wardrowbe-mcp-oidc \
 
 | Key | Default | Description |
 |---|---|---|
-| `replicaCount` | `1` | Number of pods. |
+| `replicaCount` | `1` | Number of pods (the server is stateless; >1 works without sticky sessions). |
 | `image.repository` | `ghcr.io/jansitarski/wardrowbe-mcp` | Image repository. |
 | `image.tag` | `""` | Image tag; falls back to `.Chart.AppVersion`. |
 | `image.pullPolicy` | `IfNotPresent` | Image pull policy. |
 | `imagePullSecrets` | `[]` | Pull secrets for a private image, e.g. `[{name: ghcr-pull}]`. |
-| `config.transport` | `http` | `http` (Streamable HTTP) or `stdio`. |
+| `nameOverride` | `""` | Override the chart name used in resource names. |
+| `fullnameOverride` | `""` | Override the full resource name. |
+| `config.transport` | `http` | Must be `http`; the chart refuses `stdio` (nothing attaches to a pod's stdin). |
 | `config.host` | `0.0.0.0` | Bind host. |
 | `config.port` | `8080` | Bind port (also the container/probe port). |
 | `config.wardrowbeUrl` | `""` | **Required.** Backend base URL (no `/api/v1`). |
@@ -121,6 +122,8 @@ kubectl -n wardrowbe create secret generic wardrowbe-mcp-oidc \
 | `securityContext` | no-priv-esc, read-only root, drop ALL caps | Container security context. |
 | `serviceAccount.create` | `false` | Create a ServiceAccount. |
 | `serviceAccount.name` | `""` | ServiceAccount name (or existing). |
+| `automountServiceAccountToken` | `false` | The server never talks to the k8s API; no token is mounted. |
+| `terminationGracePeriodSeconds` | `30` | Exceeds the binary's 15s drain window. |
 | `nodeSelector` / `tolerations` / `affinity` | `{}` / `[]` / `{}` | Scheduling. |
 | `podAnnotations` | `{}` | Pod annotations. |
 | `readinessProbe` | `GET /readyz` | Readiness probe (pings the backend). |

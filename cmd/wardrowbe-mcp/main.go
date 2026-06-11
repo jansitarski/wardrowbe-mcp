@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -19,24 +20,28 @@ import (
 )
 
 func main() {
-	if err := run(os.Args[1:]); err != nil {
+	err := run(os.Args[1:])
+	switch {
+	case err == nil:
+	case errors.Is(err, flag.ErrHelp):
+		// Usage was already printed by the flag package; --help is not a failure.
+	case errors.Is(err, config.ErrUsage):
+		// The flag package already reported the parse error and usage to stderr.
+		os.Exit(2)
+	default:
 		fmt.Fprintln(os.Stderr, "fatal:", err)
 		os.Exit(1)
 	}
 }
 
 func run(args []string) error {
-	// Answer --version before config parsing so it works without --api-key etc.
-	for _, a := range args {
-		if a == "--version" || a == "-version" {
-			fmt.Println(mcpserver.Version())
-			return nil
-		}
-	}
-
 	cfg, err := config.Load(args)
 	if err != nil {
 		return err
+	}
+	if cfg.ShowVersion {
+		fmt.Println(mcpserver.Version())
+		return nil
 	}
 
 	logger := newLogger(cfg.LogLevel)
@@ -110,10 +115,24 @@ func serveHTTP(cfg config.Config, srv *mcpserver.Server, logger *slog.Logger) er
 	case err := <-errCh:
 		return err
 	case <-ctx.Done():
+		// Restore default signal handling so a second Ctrl-C force-exits instead
+		// of being swallowed while we drain.
+		stop()
 		logger.Info("shutdown signal received, draining")
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		return httpSrv.Shutdown(shutdownCtx)
+		if err := httpSrv.Shutdown(shutdownCtx); err != nil {
+			if !errors.Is(err, context.DeadlineExceeded) {
+				// Not the drain timeout — a real shutdown failure; report it.
+				return err
+			}
+			// In-flight requests can legitimately outlive the drain window (a slow
+			// outfit suggestion runs minutes). Abandoning them on a routine SIGTERM
+			// is expected, not fatal — close the remaining connections and exit 0.
+			logger.Warn("drain window elapsed; closing remaining connections", "err", err)
+			_ = httpSrv.Close()
+		}
+		return nil
 	}
 }
 
@@ -127,11 +146,12 @@ func buildProvider(cfg config.Config) (wardrowbe.TokenProvider, error) {
 		}, nil
 	case config.AuthOIDC:
 		return &wardrowbe.OIDCTokenProvider{
-			Issuer:       cfg.OIDCIssuerURL,
-			ClientID:     cfg.OIDCClientID,
-			ClientSecret: cfg.OIDCClientSecret,
-			RefreshToken: cfg.OIDCRefreshToken,
-			HTTPClient:   &http.Client{Timeout: 30 * time.Second},
+			Issuer:        cfg.OIDCIssuerURL,
+			ClientID:      cfg.OIDCClientID,
+			ClientSecret:  cfg.OIDCClientSecret,
+			RefreshToken:  cfg.OIDCRefreshToken,
+			TokenEndpoint: cfg.OIDCTokenEndpoint,
+			HTTPClient:    &http.Client{Timeout: 30 * time.Second},
 		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported auth mode %q", cfg.AuthMode)

@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -104,24 +105,126 @@ func TestOIDCDiscoveryNon200(t *testing.T) {
 	}
 }
 
-// TestOIDCRejectsTokenEndpointOnDifferentHost is the key security test: a
-// tampered/MITM'd discovery document pointing the token endpoint at an attacker
-// host (where the client secret + refresh token would be POSTed) must be refused.
-func TestOIDCRejectsTokenEndpointOnDifferentHost(t *testing.T) {
+// TestOIDCAcceptsCrossHostTokenEndpoint: major IdPs serve the token endpoint
+// from a different host than the issuer (Google: accounts.google.com vs
+// oauth2.googleapis.com; AWS Cognito likewise), so a cross-host https
+// token_endpoint from the (TLS-authenticated) discovery document is accepted.
+func TestOIDCAcceptsCrossHostTokenEndpoint(t *testing.T) {
+	idTok := makeIDToken(map[string]any{"sub": "user-123"})
+	var srv *httptest.Server
+	mux := http.NewServeMux()
+	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, _ *http.Request) {
+		// Advertise the token endpoint on a hostname (example.com, covered by
+		// the httptest certificate's SANs) that differs from the issuer host
+		// (127.0.0.1). The client's dialer below routes it back to the stub.
+		_, _ = io.WriteString(w, `{"token_endpoint":"https://example.com/token"}`)
+	})
+	mux.HandleFunc("/token", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"id_token":"`+idTok+`"}`)
+	})
+	srv = httptest.NewTLSServer(mux)
+	defer srv.Close()
+
+	tr := srv.Client().Transport.(*http.Transport).Clone()
+	tr.DialContext = func(ctx context.Context, network, _ string) (net.Conn, error) {
+		var d net.Dialer
+		return d.DialContext(ctx, network, srv.Listener.Addr().String())
+	}
+
+	p := &OIDCTokenProvider{
+		Issuer:       srv.URL, // https://127.0.0.1:<port> — host differs from example.com
+		ClientID:     "client-1",
+		RefreshToken: "refresh-1",
+		HTTPClient:   &http.Client{Transport: tr},
+	}
+	if _, err := p.SyncPayload(context.Background()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// TestOIDCTokenEndpointOverrideSkipsDiscovery: an explicit TokenEndpoint must
+// be used directly, without fetching the discovery document.
+func TestOIDCTokenEndpointOverrideSkipsDiscovery(t *testing.T) {
+	idTok := makeIDToken(map[string]any{"sub": "user-123"})
+	discoveries := 0
+	var srv *httptest.Server
+	mux := http.NewServeMux()
+	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, _ *http.Request) {
+		discoveries++
+		_, _ = io.WriteString(w, `{"token_endpoint":"`+srv.URL+`/token"}`)
+	})
+	mux.HandleFunc("/token", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"id_token":"`+idTok+`"}`)
+	})
+	srv = httptest.NewTLSServer(mux)
+	defer srv.Close()
+
+	p := &OIDCTokenProvider{
+		Issuer:        srv.URL,
+		ClientID:      "client-1",
+		RefreshToken:  "refresh-1",
+		TokenEndpoint: srv.URL + "/token",
+		HTTPClient:    srv.Client(),
+	}
+	if _, err := p.SyncPayload(context.Background()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if discoveries != 0 {
+		t.Errorf("discovery fetched %d times, want 0 (explicit endpoint)", discoveries)
+	}
+}
+
+// TestOIDCRotatedRefreshTokenUsedOnNextGrant: when the IdP rotates the refresh
+// token, the next grant must POST the new token, not the original.
+func TestOIDCRotatedRefreshTokenUsedOnNextGrant(t *testing.T) {
+	idTok := makeIDToken(map[string]any{"sub": "user-123"})
+	var seen []string
+	var srv *httptest.Server
+	mux := http.NewServeMux()
+	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"token_endpoint":"`+srv.URL+`/token"}`)
+	})
+	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		seen = append(seen, r.PostFormValue("refresh_token"))
+		_, _ = io.WriteString(w, `{"id_token":"`+idTok+`","refresh_token":"rotated-`+itoaTest(len(seen))+`"}`)
+	})
+	srv = httptest.NewTLSServer(mux)
+	defer srv.Close()
+
+	p := &OIDCTokenProvider{
+		Issuer:       srv.URL,
+		ClientID:     "client-1",
+		RefreshToken: "refresh-original",
+		HTTPClient:   srv.Client(),
+	}
+	for i := 0; i < 2; i++ {
+		if _, err := p.SyncPayload(context.Background()); err != nil {
+			t.Fatalf("grant %d: unexpected error: %v", i, err)
+		}
+	}
+	want := []string{"refresh-original", "rotated-1"}
+	if len(seen) != 2 || seen[0] != want[0] || seen[1] != want[1] {
+		t.Errorf("refresh tokens sent = %v, want %v", seen, want)
+	}
+}
+
+func itoaTest(n int) string { return string(rune('0' + n)) }
+
+// TestOIDCErrorBodySurfacedOnNon200: RFC 6749 §5.2 errors arrive as a 400 with
+// a JSON body; the error code must reach the caller, not just the status.
+func TestOIDCErrorBodySurfacedOnNon200(t *testing.T) {
 	p, stop := startOIDC(t,
-		func(string) (int, string) {
-			return 200, `{"token_endpoint":"https://attacker.example.com/token"}`
+		selfTokenEndpoint,
+		func() (int, string) {
+			return 400, `{"error":"invalid_grant","error_description":"refresh token expired"}`
 		},
-		func() (int, string) { return 200, `{"id_token":"x.y.z"}` }, // must never be reached
 	)
 	defer stop()
 
 	_, err := p.SyncPayload(context.Background())
-	if err == nil {
-		t.Fatal("expected error: token_endpoint host must match issuer")
-	}
-	if !strings.Contains(err.Error(), "does not match issuer host") {
-		t.Errorf("error = %v, want host-mismatch rejection", err)
+	if err == nil || !strings.Contains(err.Error(), "invalid_grant") {
+		t.Errorf("err = %v, want invalid_grant surfaced from 400 body", err)
 	}
 }
 

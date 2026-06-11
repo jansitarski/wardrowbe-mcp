@@ -13,10 +13,46 @@ on:
 permissions: {}
 
 jobs:
-  publish:
+  # Gate publishing on the same checks CI runs: a tag pushed on a broken or
+  # unformatted commit must not ship.
+  test:
     runs-on: ubuntu-latest
     permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: '1.25.11'
+          cache: true
+
+      - name: Verify formatting
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "These files are not gofmt-clean:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test (race)
+        run: go test -race ./...
+
+      - name: Integration test
+        run: go test -tags integration -race ./internal/mcpserver/
+
+  publish:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read    # checkout (required while the repo is private; harmless after)
       packages: write   # push the image and Helm chart to GHCR
+      id-token: write   # sign the build-provenance attestation
+      attestations: write
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
@@ -42,6 +78,7 @@ jobs:
             type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
 
       - name: Build and push image
+        id: build
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
@@ -54,22 +91,33 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Attest image build provenance
+        uses: actions/attest-build-provenance@96278af6caaf10aea03fd8d33a09a777ca52d62f # v3.2.0
+        with:
+          subject-name: ghcr.io/${{ github.repository }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
       - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
 
       - name: Package and push Helm chart
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OWNER: ${{ github.repository_owner }}
         run: |
-          version="${{ steps.meta.outputs.version }}"
-          helm registry login ghcr.io \
-            -u "${{ github.actor }}" --password-stdin <<<"${{ secrets.GITHUB_TOKEN }}"
-          helm package charts/wardrowbe-mcp --version "$version" --app-version "$version"
-          helm push "wardrowbe-mcp-${version}.tgz" \
-            "oci://ghcr.io/${{ github.repository_owner }}/charts"
+          helm registry login ghcr.io -u "$GHCR_USER" --password-stdin <<<"$GHCR_TOKEN"
+          helm package charts/wardrowbe-mcp --version "$VERSION" --app-version "$VERSION"
+          helm push "wardrowbe-mcp-${VERSION}.tgz" "oci://ghcr.io/${OWNER}/charts"
 
   release:
     needs: publish
     runs-on: ubuntu-latest
     permissions:
       contents: write   # create the GitHub Release
+      id-token: write   # sign the build-provenance attestation
+      attestations: write
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
@@ -96,6 +144,13 @@ jobs:
           build arm   armv7 7
           ( cd dist && sha256sum * > SHA256SUMS.txt )
           ls -l dist
+
+      # SHA256SUMS.txt lives in the same release it protects; the signed
+      # provenance attestation gives an integrity statement that doesn't.
+      - name: Attest binary build provenance
+        uses: actions/attest-build-provenance@96278af6caaf10aea03fd8d33a09a777ca52d62f # v3.2.0
+        with:
+          subject-path: dist/*
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2

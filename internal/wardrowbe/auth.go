@@ -51,10 +51,15 @@ type OIDCTokenProvider struct {
 	ClientID     string
 	ClientSecret string
 	RefreshToken string
-	HTTPClient   *http.Client
+	// TokenEndpoint, when set, is used directly and discovery is skipped. Must
+	// be https (validated in config). Useful for IdPs whose discovery is
+	// unusual, or to pin the endpoint explicitly.
+	TokenEndpoint string
+	HTTPClient    *http.Client
 
 	mu            sync.Mutex
 	tokenEndpoint string // cached after first successful discovery
+	refreshToken  string // current grant; replaces RefreshToken when the IdP rotates it
 }
 
 type oidcDiscovery struct {
@@ -62,9 +67,10 @@ type oidcDiscovery struct {
 }
 
 type oidcTokenResponse struct {
-	IDToken string `json:"id_token"`
-	Error   string `json:"error"`
-	ErrDesc string `json:"error_description"`
+	IDToken      string `json:"id_token"`
+	RefreshToken string `json:"refresh_token"`
+	Error        string `json:"error"`
+	ErrDesc      string `json:"error_description"`
 }
 
 type idTokenClaims struct {
@@ -81,9 +87,19 @@ func (o *OIDCTokenProvider) SyncPayload(ctx context.Context) (SyncPayload, error
 		return SyncPayload{}, err
 	}
 
+	// Use the most recently issued refresh token: IdPs with rotation enabled
+	// (Auth0, Okta, Keycloak with reuse detection) invalidate the old one on
+	// every grant, so re-POSTing the original would fail the second refresh.
+	o.mu.Lock()
+	refreshToken := o.refreshToken
+	o.mu.Unlock()
+	if refreshToken == "" {
+		refreshToken = o.RefreshToken
+	}
+
 	form := url.Values{
 		"grant_type":    {"refresh_token"},
-		"refresh_token": {o.RefreshToken},
+		"refresh_token": {refreshToken},
 		"client_id":     {o.ClientID},
 	}
 	if o.ClientSecret != "" {
@@ -108,6 +124,16 @@ func (o *OIDCTokenProvider) SyncPayload(ctx context.Context) (SyncPayload, error
 		return SyncPayload{}, fmt.Errorf("oidc: read token response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
+		// RFC 6749 §5.2: failures arrive as a 400 with a JSON error body. Surface
+		// error/error_description so e.g. an expired refresh token reads as
+		// "invalid_grant" instead of a bare status code.
+		var oerr oidcTokenResponse
+		if json.Unmarshal(body, &oerr) == nil && oerr.Error != "" {
+			if oerr.ErrDesc != "" {
+				return SyncPayload{}, fmt.Errorf("oidc: token endpoint returned %d: %s (%s)", resp.StatusCode, oerr.Error, oerr.ErrDesc)
+			}
+			return SyncPayload{}, fmt.Errorf("oidc: token endpoint returned %d: %s", resp.StatusCode, oerr.Error)
+		}
 		return SyncPayload{}, fmt.Errorf("oidc: token endpoint returned %d", resp.StatusCode)
 	}
 
@@ -121,6 +147,12 @@ func (o *OIDCTokenProvider) SyncPayload(ctx context.Context) (SyncPayload, error
 	if tok.IDToken == "" {
 		return SyncPayload{}, fmt.Errorf("oidc: token response missing id_token")
 	}
+	if tok.RefreshToken != "" && tok.RefreshToken != refreshToken {
+		// The IdP rotated the refresh token; the old one may now be invalid.
+		o.mu.Lock()
+		o.refreshToken = tok.RefreshToken
+		o.mu.Unlock()
+	}
 
 	claims, err := decodeIDTokenClaims(tok.IDToken)
 	if err != nil {
@@ -133,6 +165,11 @@ func (o *OIDCTokenProvider) SyncPayload(ctx context.Context) (SyncPayload, error
 }
 
 func (o *OIDCTokenProvider) discoverTokenEndpoint(ctx context.Context) (string, error) {
+	// An explicit override skips discovery entirely.
+	if o.TokenEndpoint != "" {
+		return o.TokenEndpoint, nil
+	}
+
 	// The token endpoint never changes for a given issuer; cache it after the
 	// first successful discovery so each token refresh doesn't re-fetch the
 	// discovery document.
@@ -163,15 +200,16 @@ func (o *OIDCTokenProvider) discoverTokenEndpoint(ctx context.Context) (string, 
 	if disc.TokenEndpoint == "" {
 		return "", fmt.Errorf("oidc: discovery missing token_endpoint")
 	}
-	// The client secret and refresh token are POSTed to this endpoint, so refuse
-	// a discovery document that points it off the issuer's own (https) host —
-	// that would let a tampered/MITM'd document harvest credentials.
+	// The client secret and refresh token are POSTed to this endpoint, so it
+	// must be https. We deliberately do NOT pin it to the issuer's host: major
+	// IdPs serve the token endpoint from a different domain (Google:
+	// accounts.google.com -> oauth2.googleapis.com; AWS Cognito similarly), and
+	// the discovery document was just fetched over TLS from the config-validated
+	// https issuer — the transport already authenticates it. Operators who want
+	// a pin can set TokenEndpoint explicitly.
 	ep, err := url.Parse(disc.TokenEndpoint)
-	if err != nil || ep.Scheme != "https" {
+	if err != nil || ep.Scheme != "https" || ep.Host == "" {
 		return "", fmt.Errorf("oidc: token_endpoint is not a valid https URL")
-	}
-	if iss, err := url.Parse(o.Issuer); err == nil && !strings.EqualFold(ep.Host, iss.Host) {
-		return "", fmt.Errorf("oidc: token_endpoint host %q does not match issuer host %q", ep.Host, iss.Host)
 	}
 
 	o.mu.Lock()

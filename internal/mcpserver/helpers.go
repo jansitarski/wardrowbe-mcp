@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jansitarski/wardrowbe-mcp/internal/wardrowbe"
@@ -26,11 +29,78 @@ func clampInt(v, lo, hi int) int {
 
 func itoa(v int) string { return strconv.Itoa(v) }
 
-// isValidDate reports whether s is a calendar date in YYYY-MM-DD form. Validating
-// at the gateway turns a vague backend 422 into a clear tool-level message.
+// isValidDate reports whether s is a canonical calendar date in YYYY-MM-DD form
+// (time.Parse alone accepts non-canonical inputs like "2026-6-1"). Validating at
+// the gateway turns a vague backend 422 into a clear tool-level message.
 func isValidDate(s string) bool {
-	_, err := time.Parse("2006-01-02", s)
-	return err == nil
+	t, err := time.Parse("2006-01-02", s)
+	return err == nil && t.Format("2006-01-02") == s
+}
+
+// requireID returns the named argument as a trimmed, non-empty string, or a
+// tool error result. RequireString alone accepts "" — and an empty path segment
+// turns e.g. GET /items/{id} into GET /items/, which the backend redirects to
+// the whole collection, silently returning the wrong data.
+func requireID(req mcp.CallToolRequest, key string) (string, *mcp.CallToolResult) {
+	v, err := req.RequireString(key)
+	if err != nil || strings.TrimSpace(v) == "" {
+		return "", mcp.NewToolResultError(key + " is required and must be a non-empty string")
+	}
+	return strings.TrimSpace(v), nil
+}
+
+// argBool reads an optional boolean argument strictly: a present but non-bool
+// value (e.g. favorite:"yes") is a tool error, not a silent default — this is
+// often a write path and the default would be persisted.
+func argBool(req mcp.CallToolRequest, key string) (val bool, present bool, errRes *mcp.CallToolResult) {
+	raw, ok := req.GetArguments()[key]
+	if !ok {
+		return false, false, nil
+	}
+	b, ok := raw.(bool)
+	if !ok {
+		return false, true, mcp.NewToolResultErrorf("%s must be a boolean (true/false)", key)
+	}
+	return b, true, nil
+}
+
+// argIntDefault reads an optional integer argument strictly (see argInt),
+// applying def when absent and clamping the result to [lo, hi].
+func argIntDefault(req mcp.CallToolRequest, key string, def, lo, hi int) (int, *mcp.CallToolResult) {
+	v, present, errRes := argInt(req, key)
+	if errRes != nil {
+		return 0, errRes
+	}
+	if !present {
+		v = def
+	}
+	return clampInt(v, lo, hi), nil
+}
+
+// argInt reads an optional integer argument strictly, rejecting present but
+// uncoercible values (e.g. rating:"high") instead of silently defaulting.
+func argInt(req mcp.CallToolRequest, key string) (val int, present bool, errRes *mcp.CallToolResult) {
+	raw, ok := req.GetArguments()[key]
+	if !ok {
+		return 0, false, nil
+	}
+	switch v := raw.(type) {
+	case float64:
+		if v != math.Trunc(v) {
+			return 0, true, mcp.NewToolResultErrorf("%s must be an integer", key)
+		}
+		return int(v), true, nil
+	case int:
+		return v, true, nil
+	case json.Number:
+		n, err := v.Int64()
+		if err != nil {
+			return 0, true, mcp.NewToolResultErrorf("%s must be an integer", key)
+		}
+		return int(n), true, nil
+	default:
+		return 0, true, mcp.NewToolResultErrorf("%s must be an integer", key)
+	}
 }
 
 // safeErrText renders an error for return to the MCP caller without leaking
@@ -55,10 +125,11 @@ func toolErr(summary string, err error) *mcp.CallToolResult {
 	return mcp.NewToolResultError(summary + ": " + safeErrText(err))
 }
 
-// firstOutfitID fetches the outfit list and returns the id of the first
-// (latest) outfit, or an error if there are none.
+// firstOutfitID fetches the id of the latest outfit, or an error if there are
+// none. limit=1 keeps the backend from serializing the whole outfit list just
+// to read one id.
 func (s *Server) firstOutfitID(ctx context.Context) (string, error) {
-	raw, err := s.client.Request(ctx, http.MethodGet, "/outfits", nil, nil)
+	raw, err := s.client.Request(ctx, http.MethodGet, "/outfits", url.Values{"limit": {"1"}}, nil)
 	if err != nil {
 		return "", err
 	}

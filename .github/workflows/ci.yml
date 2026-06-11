@@ -65,10 +65,38 @@ jobs:
       - name: gosec (static security analysis)
         env:
           GOSEC_VERSION: 2.27.1
+          # From gosec_2.27.1_checksums.txt on the release; update together.
+          GOSEC_SHA256: a1cc5fba45fb51131ba05dee4029b364f62f4b6739b8f24236f93de82f40da40
         run: |
           curl -sSfL "https://github.com/securego/gosec/releases/download/v${GOSEC_VERSION}/gosec_${GOSEC_VERSION}_linux_amd64.tar.gz" -o /tmp/gosec.tgz
+          echo "${GOSEC_SHA256}  /tmp/gosec.tgz" | sha256sum -c -
           tar -C /tmp -xzf /tmp/gosec.tgz gosec
           /tmp/gosec ./...
+
+  docker:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      # Smoke-build the image (no push) so Dockerfile breakage — Go-version
+      # drift, .dockerignore changes, the arm64 cross-build — surfaces on PRs
+      # instead of at tag time.
+      - name: Build image (no push)
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: false
+          build-args: |
+            VERSION=ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
   helm:
     runs-on: ubuntu-latest
