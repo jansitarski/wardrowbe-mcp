@@ -32,7 +32,10 @@ spec:
         # resolved once at container start — without this, pods keep accepting
         # the OLD key. (apiKey.existingSecret rotation still needs a manual
         # `kubectl rollout restart`, or a tool like Reloader.)
-        checksum/api-key: {{ .Values.apiKey.value | sha256sum }}
+        # The rendered Secret manifest is hashed, never the bare key: pod
+        # annotations are readable with pod-only RBAC, and an unsalted digest
+        # of the credential would be brute-forceable offline.
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
         {{- end }}
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}

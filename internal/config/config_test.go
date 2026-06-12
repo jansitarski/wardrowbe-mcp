@@ -59,6 +59,19 @@ func TestInvalidIntEnvRejected(t *testing.T) {
 	}
 }
 
+func TestInvalidIntEnvIgnoredWhenFlagOverrides(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("MCP_API_KEY", "k")
+	t.Setenv("MCP_BIND_PORT", "808O") // typo'd, but overridden by --port
+	cfg, err := Load(baseArgs("--transport", "http", "--port", "8080"))
+	if err != nil {
+		t.Fatalf("flag overrides the bad env var, so Load should succeed: %v", err)
+	}
+	if cfg.Port != 8080 {
+		t.Errorf("got port %d, want 8080", cfg.Port)
+	}
+}
+
 func TestInvalidLogLevelRejected(t *testing.T) {
 	clearEnv(t)
 	_, err := Load(baseArgs("--api-key", "k", "--log-level", "debg"))

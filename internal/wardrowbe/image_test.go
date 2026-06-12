@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"image"
 	"image/color"
+	"image/jpeg"
 	"image/png"
 	"testing"
 )
@@ -44,6 +45,67 @@ func TestDownscaleLeavesSmallImageUntouched(t *testing.T) {
 	out, _ := downscale(orig, "image/png", 768)
 	if !bytes.Equal(out, orig) {
 		t.Error("small image should be returned unchanged")
+	}
+}
+
+// jpegWithOrientation encodes a w×h JPEG and splices a minimal APP1/Exif
+// segment carrying only the given Orientation tag in after SOI.
+func jpegWithOrientation(t *testing.T, w, h int, orientation byte) []byte {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, w, h))
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			img.Set(x, y, color.RGBA{uint8(x % 256), uint8(y % 256), 100, 255})
+		}
+	}
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, img, nil); err != nil {
+		t.Fatalf("encode jpeg: %v", err)
+	}
+	data := buf.Bytes()
+	payload := []byte{
+		'E', 'x', 'i', 'f', 0, 0, // Exif header
+		'M', 'M', 0, 42, 0, 0, 0, 8, // big-endian TIFF, IFD0 at offset 8
+		0, 1, // one entry
+		0x01, 0x12, 0, 3, 0, 0, 0, 1, 0, orientation, 0, 0, // Orientation (SHORT)
+		0, 0, 0, 0, // no next IFD
+	}
+	app1 := append([]byte{0xFF, 0xE1, byte((len(payload) + 2) >> 8), byte(len(payload) + 2)}, payload...)
+	out := append([]byte{}, data[:2]...) // SOI
+	out = append(out, app1...)
+	return append(out, data[2:]...)
+}
+
+func TestDownscaleBakesInJPEGOrientation(t *testing.T) {
+	orig := jpegWithOrientation(t, 1600, 800, 6) // stored rotated: displays as 800x1600
+	if got := jpegOrientation(orig); got != 6 {
+		t.Fatalf("fixture orientation = %d, want 6", got)
+	}
+	out, mime := downscale(orig, "image/jpeg", 768)
+	if mime != "image/jpeg" {
+		t.Fatalf("mime changed: %s", mime)
+	}
+	if bytes.Equal(out, orig) {
+		t.Fatal("oriented JPEG above maxDim must be downscaled, not passed through at full size")
+	}
+	decoded, _, err := image.Decode(bytes.NewReader(out))
+	if err != nil {
+		t.Fatalf("decode downscaled: %v", err)
+	}
+	b := decoded.Bounds()
+	if b.Dx() != 384 || b.Dy() != 768 {
+		t.Errorf("dims = %dx%d, want 384x768 (rotated upright, then scaled)", b.Dx(), b.Dy())
+	}
+	if got := jpegOrientation(out); got != 1 {
+		t.Errorf("re-encoded output still carries orientation %d, want 1 (upright)", got)
+	}
+}
+
+func TestDownscaleLeavesSmallOrientedJPEGUntouched(t *testing.T) {
+	orig := jpegWithOrientation(t, 400, 300, 6)
+	out, _ := downscale(orig, "image/jpeg", 768)
+	if !bytes.Equal(out, orig) {
+		t.Error("small oriented JPEG should keep its original bytes (and EXIF)")
 	}
 }
 

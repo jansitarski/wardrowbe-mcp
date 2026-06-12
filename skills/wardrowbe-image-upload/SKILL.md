@@ -118,10 +118,11 @@ is still `processing` will be clobbered. Workflow:
 ## Gotchas
 
 - **`wardrowbe_archive_item` `reason` ≤ 50 chars** — the tool rejects longer.
-- **`wardrowbe_list_items` is paginated** (default `page_size` 25, max 100) — iterate
-  `page` to cover a large wardrobe. Per-page output is still sizable full JSON; parse
-  saved results with `python3`/`jq` for the fields you need rather than re-reading
-  whole pages.
+- **`wardrowbe_list_items` is paginated** (default `page_size` 25, max 100) — the
+  response echoes the effective `page`/`page_size`, with the backend payload under
+  `result`; iterate `page` until a page comes back short to cover a large wardrobe.
+  Per-page output is still sizable full JSON; parse saved results with
+  `python3`/`jq` for the fields you need rather than re-reading whole pages.
 - **`wardrowbe_update_item` has no `material` parameter** — write material via
   `wardrowbe_set_item_tags` (`tags.material`). Top-level `colors`/`primary_color`
   **do** update via `wardrowbe_update_item`.

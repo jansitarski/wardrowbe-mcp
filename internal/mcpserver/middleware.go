@@ -75,51 +75,35 @@ func (s *Server) rootHandler(w http.ResponseWriter, r *http.Request) {
 // readyHandler answers readiness probes by pinging the backend within a short
 // deadline. 200 means the backend is reachable; 503 means it is not.
 func (s *Server) readyHandler(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(r.Context(), readinessTimeout)
-	defer cancel()
-	if err := s.readiness(ctx); err != nil {
+	if err := s.readiness(); err != nil {
 		writeJSON(w, http.StatusServiceUnavailable, `{"status":"unavailable"}`)
 		return
 	}
 	writeJSON(w, http.StatusOK, `{"status":"ready"}`)
 }
 
-// errReadyPending is returned (as "not ready") to /readyz callers that arrive
-// while the very first backend ping is still in flight.
-var errReadyPending = errors.New("readiness not yet established")
-
 // readiness returns the backend reachability result, pinging at most once per
-// readyCacheTTL and serving a cached result otherwise. At most one ping runs
-// at a time: concurrent callers get the last known result instead of each
-// launching their own backend request.
-func (s *Server) readiness(ctx context.Context) error {
+// readyCacheTTL and serving a cached result otherwise. The mutex is held across
+// the (readinessTimeout-bounded) ping so concurrent callers wait briefly for
+// the fresh result instead of each launching their own backend request. The
+// ping runs on a context detached from any caller: /readyz is unauthenticated,
+// and a probe that disconnects mid-ping must not get its cancellation cached
+// and served to every other caller as "not ready".
+func (s *Server) readiness() error {
 	s.readyMu.Lock()
+	defer s.readyMu.Unlock()
 	if !s.readyChecked.IsZero() && time.Since(s.readyChecked) < readyCacheTTL {
-		err := s.readyErr
-		s.readyMu.Unlock()
-		return err
+		return s.readyErr
 	}
-	if s.readyInflight {
-		err := s.readyErr
-		if s.readyChecked.IsZero() {
-			err = errReadyPending
-		}
-		s.readyMu.Unlock()
-		return err
-	}
-	s.readyInflight = true
-	s.readyMu.Unlock()
 
+	ctx, cancel := context.WithTimeout(context.Background(), readinessTimeout)
+	defer cancel()
 	err := s.client.Ping(ctx)
 	if err != nil {
 		s.log.Warn("readiness check failed", "error", err)
 	}
-
-	s.readyMu.Lock()
 	s.readyChecked = time.Now()
 	s.readyErr = err
-	s.readyInflight = false
-	s.readyMu.Unlock()
 	return err
 }
 

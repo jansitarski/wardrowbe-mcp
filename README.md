@@ -138,7 +138,7 @@ output or flag-error usage text.
 | `503` with `Retry-After` on `/mcp` | Concurrency cap hit | Raise `--max-concurrent`; the limiter sheds load instead of queuing. |
 | `413` / request rejected | Body exceeds cap | Raise `--max-body-mb` (default 40) for large base64 uploads. |
 | `wardrowbe_create_item_from_url` refuses a URL | SSRF guard / non-public host | The URL must be `http(s)` and resolve to a public IP; private/loopback/link-local/multicast/NAT64 targets are blocked. |
-| OIDC refresh fails with `invalid_grant` | Refresh token expired/rotated out | Issue a fresh refresh token; the server follows rotation automatically once running. |
+| OIDC refresh fails with `invalid_grant` | Refresh token expired/rotated out | Issue a fresh refresh token. The server follows rotation automatically while running, but the rotated token is held in memory only — after a restart it resumes from the configured token, which a rotation-enforcing IdP may have invalidated. Re-issue and update `MCP_OIDC_REFRESH_TOKEN` whenever this happens; with such IdPs also run a single replica (a shared refresh token across replicas trips reuse detection). |
 | Startup log warns about dev auth | `--auth dev` on http | Expected for a single user; set `--auth oidc` for real per-user identity. |
 | Process exits at startup with "invalid …" | Bad flag/env value | The config is validated up front — the message names the offending flag/env var. |
 

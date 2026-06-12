@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
+	"sync"
 
 	"github.com/jansitarski/wardrowbe-mcp/internal/wardrowbe"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -14,6 +16,10 @@ import (
 // maxOutfitImageFanout caps how many garment images one get_outfit_images call
 // fetches and returns — both backend fan-out and response size grow per image.
 const maxOutfitImageFanout = 20
+
+// outfitImageConcurrency bounds how many garment images are fetched in
+// parallel within one get_outfit_images call.
+const outfitImageConcurrency = 4
 
 func (s *Server) registerImageTools() {
 	s.add(mcp.NewTool("wardrowbe_get_item_image",
@@ -90,20 +96,45 @@ func (s *Server) handleOutfitImages(ctx context.Context, req mcp.CallToolRequest
 		garments = garments[:maxOutfitImageFanout]
 	}
 
+	// Fetch the garment images with bounded parallelism, writing into an
+	// index-addressed slice so the manifest keeps the outfit's garment order.
+	// The bound is deliberately small: each in-flight fetch can buffer up to
+	// 20 MiB on the wire plus a decoded frame, and the handler already runs
+	// under the /mcp concurrency limiter.
+	type imageResult struct {
+		img wardrowbe.ImageData
+		err error
+	}
+	itemIDs := make([]string, len(garments))
+	results := make([]imageResult, len(garments))
+	sem := make(chan struct{}, outfitImageConcurrency)
+	var wg sync.WaitGroup
+	for i, g := range garments {
+		itemIDs[i] = wardrowbe.StringField(g, "id")
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			img, err := s.client.ItemImageFromPayload(ctx, itemIDs[i], g, variant, s.cfg.ImageMaxDim)
+			results[i] = imageResult{img: img, err: err}
+		}()
+	}
+	wg.Wait()
+
 	content := []mcp.Content{}
 	manifest := make([]map[string]any, 0, len(garments))
-	fetched := 0
 
-	for _, g := range garments {
-		itemID := wardrowbe.StringField(g, "id")
-		img, err := s.client.ItemImageFromPayload(ctx, itemID, g, variant, s.cfg.ImageMaxDim)
+	for i := range garments {
+		itemID := itemIDs[i]
 		entry := map[string]any{"item_id": itemID}
-		if err != nil {
+		if err := results[i].err; err != nil {
 			entry["error"] = safeErrText(err)
 			manifest = append(manifest, entry)
 			s.log.Warn("outfit image fetch failed", "item_id", itemID, "err", err)
 			continue
 		}
+		img := results[i].img
 		entry["mime_type"] = img.MIME
 		entry["bytes"] = len(img.Data)
 		manifest = append(manifest, entry)
@@ -113,10 +144,9 @@ func (s *Server) handleOutfitImages(ctx context.Context, req mcp.CallToolRequest
 		content = append(content,
 			mcp.NewTextContent(string(label)),
 			mcp.NewImageContent(base64.StdEncoding.EncodeToString(img.Data), img.MIME))
-		fetched++
 	}
 
-	if fetched == 0 {
+	if len(content) == 0 {
 		// Every garment image failed — surface it as an error, not a "success"
 		// with an all-errors manifest the model would misread as a partial result.
 		return mcp.NewToolResultError("could not fetch any garment images for this outfit"), nil
@@ -160,13 +190,17 @@ func extractOutfitGarments(raw json.RawMessage) ([]map[string]any, error) {
 	for _, key := range []string{"items", "garments", "pieces"} {
 		if v, ok := obj[key]; ok {
 			var arr []map[string]any
-			if err := json.Unmarshal(v, &arr); err == nil {
-				return arr, nil
+			if err := json.Unmarshal(v, &arr); err != nil {
+				// The key is present but not a garment array: that's backend
+				// schema drift, not an empty outfit — masking it as "no garments"
+				// would misreport a malformed payload as a benign result.
+				return nil, fmt.Errorf("outfit field %q is not a garment list: %w", key, err)
 			}
+			return arr, nil
 		}
 	}
 	// No recognised garment-list key: a well-formed but garment-less outfit.
 	// Return an empty list (not an error) and let the caller's len==0 guard produce
-	// the user-facing "no garments" message — only malformed JSON is a real error.
+	// the user-facing "no garments" message.
 	return nil, nil
 }

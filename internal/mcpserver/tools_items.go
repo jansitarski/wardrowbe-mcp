@@ -2,6 +2,7 @@ package mcpserver
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/url"
 	"unicode/utf8"
@@ -20,7 +21,8 @@ const maxArchiveReasonLen = 50
 func (s *Server) registerItemTools() {
 	s.add(mcp.NewTool("wardrowbe_list_items",
 		mcp.WithDescription("List wardrobe items with optional filters. Results are paginated: "+
-			"page_size defaults to 25 — pass page to fetch more, or a filter/search to narrow."),
+			"page_size defaults to 25 — pass page to fetch more, or a filter/search to narrow. "+
+			"The response echoes the effective page/page_size, with the backend payload under \"result\"."),
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithInteger("page", mcp.Description("1-based page number."), mcp.Min(1)),
 		mcp.WithInteger("page_size", mcp.Description("Items per page (1-100)."),
@@ -78,9 +80,11 @@ func (s *Server) registerItemTools() {
 
 func (s *Server) handleListItems(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	q := url.Values{}
-	if page, present, errRes := argInt(req, "page"); errRes != nil {
+	page := 1
+	if p, present, errRes := argInt(req, "page"); errRes != nil {
 		return errRes, nil
-	} else if present && page > 0 {
+	} else if present && p > 0 {
+		page = p
 		q.Set("page", itoa(page))
 	}
 	size, present, errRes := argInt(req, "page_size")
@@ -90,7 +94,8 @@ func (s *Server) handleListItems(ctx context.Context, req mcp.CallToolRequest) (
 	if !present || size <= 0 {
 		size = defaultListPageSize
 	}
-	q.Set("page_size", itoa(clampInt(size, 1, 100)))
+	size = clampInt(size, 1, 100)
+	q.Set("page_size", itoa(size))
 	if category := req.GetString("category", ""); category != "" {
 		q.Set("category", category)
 	}
@@ -112,7 +117,19 @@ func (s *Server) handleListItems(ctx context.Context, req mcp.CallToolRequest) (
 	if err != nil {
 		return toolErr("list items failed", err), nil
 	}
-	return jsonText(raw), nil
+	// Echo the effective pagination around the backend payload: the listing is
+	// always paginated (page_size defaults to 25), and backend list responses
+	// don't reliably carry page metadata — without the echo, a zero-arg call
+	// over a larger wardrobe reads as if 25 items were the whole collection.
+	envelope, err := json.Marshal(map[string]any{
+		"page":      page,
+		"page_size": size,
+		"result":    json.RawMessage(raw),
+	})
+	if err != nil {
+		return jsonText(raw), nil
+	}
+	return mcp.NewToolResultText(string(envelope)), nil
 }
 
 func (s *Server) handleGetItem(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {

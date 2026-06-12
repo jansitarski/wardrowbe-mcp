@@ -25,6 +25,11 @@ const apiBase = "/api/v1"
 // refreshLeeway is subtracted from the token TTL so we re-sync before expiry.
 const refreshLeeway = 30 * time.Second
 
+// syncTimeout bounds a coalesced token refresh. The refresh runs on a context
+// detached from the leader's request (its result is shared with every waiter),
+// so it needs its own deadline.
+const syncTimeout = 30 * time.Second
+
 // maxAPIResponseBytes caps how much of a backend JSON response we buffer, so a
 // misbehaving or compromised backend cannot exhaust memory.
 const maxAPIResponseBytes = 16 << 20 // 16 MiB
@@ -119,8 +124,9 @@ func (c *Client) ensureToken(ctx context.Context) (string, error) {
 // that just got a 401: if it still matches the cache the cache is stale and a
 // re-sync is forced; if a peer already replaced it, the fresh cached token is
 // returned without another /auth/sync (avoids a re-sync herd when many
-// concurrent requests 401 at once). Refreshes are single-flight, and waiters
-// honor their own ctx cancellation instead of blocking on a mutex.
+// concurrent requests 401 at once). Refreshes are single-flight and run
+// detached from any one caller's context; every caller (leader included)
+// honors its own ctx cancellation instead of blocking on a mutex.
 func (c *Client) tokenFor(ctx context.Context, badToken string) (string, error) {
 	c.mu.Lock()
 	if c.token != "" && c.token != badToken && time.Now().Before(c.expiresAt) {
@@ -144,19 +150,35 @@ func (c *Client) tokenFor(ctx context.Context, badToken string) (string, error) 
 	c.token = ""
 	c.mu.Unlock()
 
-	token, expiresAt, err := c.doSync(ctx)
+	// Run the sync detached from the leader's request context: its result is
+	// shared with every coalesced waiter, so one cancelled caller (a dropped
+	// MCP client, an aborted /readyz probe) must not fail requests whose own
+	// contexts are still live. WithoutCancel keeps the parent's values; the
+	// sync gets its own deadline instead. The leader waits on the latch like
+	// any other caller, honoring its own ctx.
+	go func() {
+		syncCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), syncTimeout)
+		defer cancel()
+		token, expiresAt, err := c.doSync(syncCtx)
 
-	c.mu.Lock()
-	if err == nil {
-		c.token = token
-		c.expiresAt = expiresAt
+		c.mu.Lock()
+		if err == nil {
+			c.token = token
+			c.expiresAt = expiresAt
+		}
+		c.inflight = nil
+		c.mu.Unlock()
+
+		fl.token, fl.err = token, err
+		close(fl.done)
+	}()
+
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	case <-fl.done:
 	}
-	c.inflight = nil
-	c.mu.Unlock()
-
-	fl.token, fl.err = token, err
-	close(fl.done)
-	return token, err
+	return fl.token, fl.err
 }
 
 // doSync performs POST /auth/sync and returns the new token and its cache

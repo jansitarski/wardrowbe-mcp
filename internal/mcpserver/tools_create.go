@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"path"
 	"strings"
@@ -332,6 +333,17 @@ func ssrfTransport() *http.Transport {
 	}
 }
 
+// blockedPrefixes are non-public ranges that net.IP's own predicates don't
+// cover: IPv4 carrier-grade NAT (RFC 6598, commonly internal) and the NAT64
+// well-known prefix (RFC 6052) — NAT64 addresses embed an IPv4 target that a
+// NAT64 gateway would translate, which can reach internal IPv4 ranges the
+// IPv6 checks don't see. Declared as CIDR strings so each entry is reviewable
+// against its RFC.
+var blockedPrefixes = []netip.Prefix{
+	netip.MustParsePrefix("100.64.0.0/10"),
+	netip.MustParsePrefix("64:ff9b::/96"),
+}
+
 func isPublicIP(ip net.IP) bool {
 	// IsMulticast covers every multicast scope (link-, site-, org-, global- and
 	// interface-local), not just the link-local range.
@@ -339,18 +351,13 @@ func isPublicIP(ip net.IP) bool {
 		ip.IsLinkLocalUnicast() || ip.IsMulticast() || ip.IsUnspecified() {
 		return false
 	}
-	// Block IPv4 carrier-grade NAT (100.64.0.0/10), commonly internal.
-	if v4 := ip.To4(); v4 != nil && v4[0] == 100 && v4[1] >= 64 && v4[1] <= 127 {
+	addr, ok := netip.AddrFromSlice(ip)
+	if !ok {
 		return false
 	}
-	// Block the NAT64 well-known prefix 64:ff9b::/96 (RFC 6052): such addresses
-	// embed an IPv4 target that a NAT64 gateway would translate, which can reach
-	// internal IPv4 ranges the IPv6 checks above don't see.
-	if v4 := ip.To4(); v4 == nil {
-		if ip16 := ip.To16(); ip16 != nil &&
-			ip16[0] == 0x00 && ip16[1] == 0x64 && ip16[2] == 0xff && ip16[3] == 0x9b &&
-			ip16[4] == 0 && ip16[5] == 0 && ip16[6] == 0 && ip16[7] == 0 &&
-			ip16[8] == 0 && ip16[9] == 0 && ip16[10] == 0 && ip16[11] == 0 {
+	addr = addr.Unmap() // 4-in-6 form must match the IPv4 prefixes
+	for _, p := range blockedPrefixes {
+		if p.Contains(addr) {
 			return false
 		}
 	}

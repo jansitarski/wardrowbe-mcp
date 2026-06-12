@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -187,7 +188,7 @@ func TestOIDCRotatedRefreshTokenUsedOnNextGrant(t *testing.T) {
 	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
 		_ = r.ParseForm()
 		seen = append(seen, r.PostFormValue("refresh_token"))
-		_, _ = io.WriteString(w, `{"id_token":"`+idTok+`","refresh_token":"rotated-`+itoaTest(len(seen))+`"}`)
+		_, _ = io.WriteString(w, `{"id_token":"`+idTok+`","refresh_token":"rotated-`+strconv.Itoa(len(seen))+`"}`)
 	})
 	srv = httptest.NewTLSServer(mux)
 	defer srv.Close()
@@ -208,8 +209,6 @@ func TestOIDCRotatedRefreshTokenUsedOnNextGrant(t *testing.T) {
 		t.Errorf("refresh tokens sent = %v, want %v", seen, want)
 	}
 }
-
-func itoaTest(n int) string { return string(rune('0' + n)) }
 
 // TestOIDCErrorBodySurfacedOnNon200: RFC 6749 §5.2 errors arrive as a 400 with
 // a JSON body; the error code must reach the caller, not just the status.

@@ -52,11 +52,10 @@ type Server struct {
 
 	// readyMu guards a short-lived cache of the last backend readiness result so
 	// the unauthenticated /readyz endpoint can't be used to drive unbounded
-	// backend pings.
-	readyMu       sync.Mutex
-	readyChecked  time.Time
-	readyErr      error
-	readyInflight bool
+	// backend pings. It is held across the bounded ping itself (see readiness).
+	readyMu      sync.Mutex
+	readyChecked time.Time
+	readyErr     error
 }
 
 // New builds the MCP server and registers all tools.

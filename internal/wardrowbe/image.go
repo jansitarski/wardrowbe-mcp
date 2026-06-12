@@ -183,13 +183,6 @@ func downscale(data []byte, mime string, maxDim int) ([]byte, string) {
 		return data, mime
 	}
 
-	// Re-encoding strips EXIF, including the Orientation tag — a rotated phone
-	// JPEG would come back sideways. Keep the original bytes (already
-	// byte-size-capped) for anything not stored upright.
-	if mime == "image/jpeg" && jpegOrientation(data) != 1 {
-		return data, mime
-	}
-
 	src, _, err := image.Decode(bytes.NewReader(data))
 	if err != nil {
 		return data, mime
@@ -197,7 +190,21 @@ func downscale(data []byte, mime string, maxDim int) ([]byte, string) {
 	b := src.Bounds()
 	w, h := b.Dx(), b.Dy()
 	if w <= maxDim && h <= maxDim {
+		// Small enough already; the untouched bytes keep their EXIF, so a
+		// rotated JPEG still displays upright.
 		return data, mime
+	}
+
+	// Re-encoding strips EXIF, including the Orientation tag — bake the stored
+	// rotation/flip into the pixels first so a phone JPEG (commonly stored
+	// rotated, Orientation 6/8) is downscaled upright instead of returned at
+	// full size or sideways.
+	if mime == "image/jpeg" {
+		if o := jpegOrientation(data); o != 1 {
+			src = applyOrientation(src, o)
+			b = src.Bounds()
+			w, h = b.Dx(), b.Dy()
+		}
 	}
 
 	nw, nh := scaledDims(w, h, maxDim)
@@ -217,10 +224,50 @@ func downscale(data []byte, mime string, maxDim int) ([]byte, string) {
 	return buf.Bytes(), "image/jpeg"
 }
 
+// applyOrientation returns img transformed so that a frame stored with EXIF
+// Orientation o (2–8) displays upright without the tag. Orientation 1 (and any
+// out-of-range value) returns img unchanged.
+func applyOrientation(img image.Image, o int) image.Image {
+	if o < 2 || o > 8 {
+		return img
+	}
+	b := img.Bounds()
+	w, h := b.Dx(), b.Dy()
+	dw, dh := w, h
+	if o >= 5 { // 5–8 are 90° transforms: the axes swap
+		dw, dh = h, w
+	}
+	dst := image.NewRGBA(image.Rect(0, 0, dw, dh))
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			var dx, dy int
+			switch o {
+			case 2: // mirrored horizontally
+				dx, dy = w-1-x, y
+			case 3: // rotated 180°
+				dx, dy = w-1-x, h-1-y
+			case 4: // mirrored vertically
+				dx, dy = x, h-1-y
+			case 5: // transposed
+				dx, dy = y, x
+			case 6: // rotated 90° CW
+				dx, dy = h-1-y, x
+			case 7: // transversed
+				dx, dy = h-1-y, w-1-x
+			case 8: // rotated 90° CCW
+				dx, dy = y, w-1-x
+			}
+			dst.Set(dx, dy, img.At(b.Min.X+x, b.Min.Y+y))
+		}
+	}
+	return dst
+}
+
 // jpegOrientation returns the EXIF Orientation tag (1–8) of a JPEG, or 1 when
 // the tag is absent or anything fails to parse (1 = stored upright). It walks
 // JPEG segments to the APP1/Exif block and reads tag 0x0112 from IFD0 — just
-// enough EXIF to decide whether re-encoding would lose a rotation.
+// enough EXIF to bake the rotation into the pixels before re-encoding strips
+// the tag.
 func jpegOrientation(data []byte) int {
 	if len(data) < 4 || data[0] != 0xFF || data[1] != 0xD8 {
 		return 1

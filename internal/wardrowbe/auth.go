@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -150,8 +151,20 @@ func (o *OIDCTokenProvider) SyncPayload(ctx context.Context) (SyncPayload, error
 	if tok.RefreshToken != "" && tok.RefreshToken != refreshToken {
 		// The IdP rotated the refresh token; the old one may now be invalid.
 		o.mu.Lock()
+		firstRotation := o.refreshToken == ""
 		o.refreshToken = tok.RefreshToken
 		o.mu.Unlock()
+		if firstRotation {
+			// The rotated token lives only in process memory: after a restart the
+			// server resumes from the configured seed token, which a
+			// rotation-enforcing IdP has already invalidated (reuse detection may
+			// even revoke the whole token family). Warn once so the operator knows
+			// to keep the stored token fresh.
+			slog.Warn("oidc: idp rotated the refresh token; the rotation is held in memory only — " +
+				"after a restart the server resumes from the configured refresh token, which the idp " +
+				"may now reject (invalid_grant). If refreshes fail after restarts, mint a fresh token " +
+				"and update MCP_OIDC_REFRESH_TOKEN.")
+		}
 	}
 
 	claims, err := decodeIDTokenClaims(tok.IDToken)
@@ -210,6 +223,15 @@ func (o *OIDCTokenProvider) discoverTokenEndpoint(ctx context.Context) (string, 
 	ep, err := url.Parse(disc.TokenEndpoint)
 	if err != nil || ep.Scheme != "https" || ep.Host == "" {
 		return "", fmt.Errorf("oidc: token_endpoint is not a valid https URL")
+	}
+	// A cross-host endpoint is where the refresh token and client secret will be
+	// POSTed, so make the expanded trust visible: anyone who can influence the
+	// discovery document chooses that destination. Operators who want it pinned
+	// set --oidc-token-endpoint.
+	if iss, perr := url.Parse(o.Issuer); perr == nil && !strings.EqualFold(ep.Host, iss.Host) {
+		slog.Warn("oidc: discovered token_endpoint is on a different host than the issuer "+
+			"(normal for e.g. Google and AWS Cognito); set --oidc-token-endpoint to pin it explicitly",
+			"issuer_host", iss.Host, "token_endpoint_host", ep.Host)
 	}
 
 	o.mu.Lock()

@@ -100,15 +100,18 @@ func Load(args []string) (Config, error) {
 
 	// Collect malformed integer env vars instead of silently falling back to the
 	// default, so a typo (e.g. MCP_MAX_CONCURRENT=abc) fails loudly at startup.
-	var envErrs []string
-	envOrInt := func(key string, fallback int) int {
+	// Each error is keyed by its flag name: an explicitly-passed flag overrides
+	// the env var (documented precedence), so its env error must not be fatal.
+	type envErr struct{ flagName, msg string }
+	var envErrs []envErr
+	envOrInt := func(flagName, key string, fallback int) int {
 		v, ok := os.LookupEnv(key)
 		if !ok || v == "" {
 			return fallback
 		}
 		n, err := strconv.Atoi(v)
 		if err != nil {
-			envErrs = append(envErrs, fmt.Sprintf("%s=%q (not an integer)", key, v))
+			envErrs = append(envErrs, envErr{flagName, fmt.Sprintf("%s=%q (not an integer)", key, v)})
 			return fallback
 		}
 		return n
@@ -116,7 +119,7 @@ func Load(args []string) (Config, error) {
 
 	transport := fs.String("transport", envOr("MCP_TRANSPORT", defaultTransport), "transport: http or stdio")
 	host := fs.String("host", envOr("MCP_BIND_HOST", defaultHost), "bind host (http)")
-	port := fs.Int("port", envOrInt("MCP_BIND_PORT", defaultPort), "bind port (http)")
+	port := fs.Int("port", envOrInt("port", "MCP_BIND_PORT", defaultPort), "bind port (http)")
 
 	wardrowbeURL := fs.String("wardrowbe-url", envOr("WARDROWBE_URL", ""), "backend base URL (no /api/v1); required")
 
@@ -139,12 +142,12 @@ func Load(args []string) (Config, error) {
 
 	logLevel := fs.String("log-level", envOr("MCP_LOG_LEVEL", defaultLogLevel), "log level")
 
-	imageMaxDim := fs.Int("image-max-dim", envOrInt("MCP_IMAGE_MAX_DIM", defaultImageMaxDim), "max returned image dimension")
+	imageMaxDim := fs.Int("image-max-dim", envOrInt("image-max-dim", "MCP_IMAGE_MAX_DIM", defaultImageMaxDim), "max returned image dimension")
 	imageVariant := fs.String("image-default-variant", envOr("MCP_IMAGE_VARIANT", defaultImageVariant), "default image variant: thumb/medium/full")
 	portalResourceURL := fs.String("portal-resource-url", envOr("MCP_PORTAL_RESOURCE_URL", ""), "OAuth protected-resource metadata URL for WWW-Authenticate")
 
-	maxConcurrent := fs.Int("max-concurrent", envOrInt("MCP_MAX_CONCURRENT", defaultMaxConcurrent), "max in-flight /mcp requests (http)")
-	maxBodyMB := fs.Int("max-body-mb", envOrInt("MCP_MAX_BODY_MB", defaultMaxBodyMB), "max inbound /mcp request body in MiB")
+	maxConcurrent := fs.Int("max-concurrent", envOrInt("max-concurrent", "MCP_MAX_CONCURRENT", defaultMaxConcurrent), "max in-flight /mcp requests (http)")
+	maxBodyMB := fs.Int("max-body-mb", envOrInt("max-body-mb", "MCP_MAX_BODY_MB", defaultMaxBodyMB), "max inbound /mcp request body in MiB")
 
 	showVersion := fs.Bool("version", false, "print version and exit")
 
@@ -159,8 +162,19 @@ func Load(args []string) (Config, error) {
 		// Skip validation: --version must work without --api-key etc.
 		return Config{ShowVersion: true}, nil
 	}
-	if len(envErrs) > 0 {
-		return Config{}, fmt.Errorf("invalid integer environment variable(s): %s", strings.Join(envErrs, ", "))
+	// A malformed integer env var is fatal only when its value would actually be
+	// used: a flag passed on the command line wins over the env var, so its env
+	// error is dropped (the stale env value never influences the config).
+	explicitly := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { explicitly[f.Name] = true })
+	var fatalEnvErrs []string
+	for _, e := range envErrs {
+		if !explicitly[e.flagName] {
+			fatalEnvErrs = append(fatalEnvErrs, e.msg)
+		}
+	}
+	if len(fatalEnvErrs) > 0 {
+		return Config{}, fmt.Errorf("invalid integer environment variable(s): %s", strings.Join(fatalEnvErrs, ", "))
 	}
 
 	// Apply env fallbacks for the secret flags that intentionally have no

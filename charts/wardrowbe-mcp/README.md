@@ -88,7 +88,7 @@ kubectl -n wardrowbe create secret generic wardrowbe-mcp-oidc \
 
 | Key | Default | Description |
 |---|---|---|
-| `replicaCount` | `1` | Number of pods (the server is stateless; >1 works without sticky sessions). |
+| `replicaCount` | `1` | Number of pods. The server is stateless for MCP traffic (>1 works without sticky sessions), but with `config.auth=oidc` and an IdP that rotates refresh tokens, keep this at `1`: replicas sharing one refresh token trip the IdP's reuse detection. |
 | `image.repository` | `ghcr.io/jansitarski/wardrowbe-mcp` | Image repository. |
 | `image.tag` | `""` | Image tag; falls back to `.Chart.AppVersion`. |
 | `image.pullPolicy` | `IfNotPresent` | Image pull policy. |
