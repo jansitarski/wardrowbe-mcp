@@ -17,7 +17,8 @@ fullnameOverride: ""
 
 # Server configuration — rendered into the binary's CLI flags.
 config:
-  # http (Streamable HTTP) or stdio. A k8s deployment should use http.
+  # Must be "http" (Streamable HTTP). The binary also supports stdio, but a
+  # Deployment attaches nothing to stdin, so the chart refuses to render it.
   transport: http
   host: 0.0.0.0
   port: 8080
@@ -38,6 +39,20 @@ config:
   maxBodyMb: ""
   # Any additional raw flags, e.g. ["--oidc-issuer=https://..."].
   extraArgs: []
+
+# OIDC auth (set config.auth=oidc). The issuer URL and client ID are not secret
+# and are passed as flags. The client secret and refresh token ARE secret, so they
+# are read from a Kubernetes Secret as environment variables (MCP_OIDC_*) rather
+# than pod args — args are visible via `kubectl get pod -o yaml`, in etcd, and in
+# audit logs.
+oidc:
+  issuerUrl: ""
+  clientId: ""
+  # Name of an existing Secret holding the OIDC client secret and/or refresh
+  # token. Leave empty when auth=dev.
+  existingSecret: ""
+  clientSecretKey: oidc-client-secret
+  refreshTokenKey: oidc-refresh-token
 
 # Incoming bearer API key (required for the http transport).
 apiKey:
@@ -84,6 +99,13 @@ securityContext:
 serviceAccount:
   create: false
   name: ""
+
+# The server never talks to the Kubernetes API; don't mount a token for it.
+automountServiceAccountToken: false
+
+# Should exceed the binary's 15s drain window so a SIGTERM shutdown can finish
+# cleanly before the kubelet sends SIGKILL.
+terminationGracePeriodSeconds: 30
 
 nodeSelector: {}
 tolerations: []

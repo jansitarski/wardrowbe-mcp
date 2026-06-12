@@ -43,6 +43,13 @@ Apply the following. Each item prevents a specific failure you would otherwise h
 5. **Access policy** — `Allow` + `Include` the user's email. The default is deny, which
    surfaces as `403` at "Save and connect".
 
+6. **Tool naming through the portal** — an Access MCP portal namespaces every tool as
+   `<portal-server-name>_<tool>`, and the server's tools already carry a `wardrowbe_`
+   prefix. Pick a short portal server name (e.g. `wb` → `wb_wardrowbe_health`) —
+   naming it `wardrowbe` gives double-prefixed tools (`wardrowbe_wardrowbe_health`).
+   Permission allowlists key on the full portal-side name, so check the portal's tool
+   list when setting them up.
+
 ## Client options
 
 | Client | How it connects |

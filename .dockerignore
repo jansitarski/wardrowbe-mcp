@@ -4,7 +4,21 @@
 .vscode
 *.test
 /out
+/dist
 /wardrowbe-mcp
+coverage.out
 docs
-README.md
+*.md
 Makefile
+
+# Not needed by the Go build — keeping them out preserves the COPY layer cache
+# when chart/docs/CI files change.
+charts
+.github
+skills
+.env.example
+
+# Never pull secrets or local worktrees into the build context/cache
+.env
+.env.*
+.claude

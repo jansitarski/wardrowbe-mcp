@@ -5,7 +5,9 @@ is simple.
 
 ## Development
 
-Go 1.25+ is required. Common tasks are in the `Makefile`:
+Go 1.25.11+ is required (the version pinned in `go.mod`; older 1.25.x patches
+either fail to build with `GOTOOLCHAIN=local` or silently download 1.25.11).
+Common tasks are in the `Makefile`:
 
 ```bash
 make build   # build the binary
@@ -52,7 +54,7 @@ Releases are cut by pushing a `vX.Y.Z` git tag. The
 (`amd64` + `arm64`) image, pushes it to `ghcr.io/jansitarski/wardrowbe-mcp`
 tagged `X.Y.Z`, `X.Y`, and `latest`, and cuts a GitHub Release with
 auto-generated notes. The tag version is baked into the binary via `-ldflags`,
-so `wardrowbe-mcp --help`/the MCP handshake report the real version.
+so `wardrowbe-mcp --version`/the MCP handshake report the real version.
 
 The same workflow packages the [Helm chart](charts/wardrowbe-mcp/) with the tag
 as both chart and app version and pushes it to
@@ -65,10 +67,35 @@ independently of the app.
 # 1. bump the default in internal/mcpserver/server.go only if you want a sane
 #    `dev` fallback; the published version comes from the tag, not the source.
 # 2. tag the release commit on master and push the tag:
-git tag v0.3.0
-git push origin v0.3.0
-# 3. bump the image tag in the k8s-homelab deployment to match.
+git tag v1.0.0
+git push origin v1.0.0
+# 3. update your deployment (e.g. the Helm chart/image version) to the new tag.
 ```
+
+### Package visibility (one-time, required for public use)
+
+The image and chart are pushed to GHCR as **container** packages. GHCR creates
+new packages **private** by default, and GitHub provides **no API** to change a
+container package's visibility — it is a one-time manual step per package, done
+once after the first release of each:
+
+- Image: **Package settings → Danger Zone → Change visibility → Public**
+  — `https://github.com/users/jansitarski/packages/container/wardrowbe-mcp/settings`
+- Chart: same, at
+  `https://github.com/users/jansitarski/packages/container/charts%2Fwardrowbe-mcp/settings`
+
+Until both are Public, the anonymous `docker run` / `helm install` commands in the
+README fail with `denied`; users would need an `imagePullSecrets` token. Verify
+after flipping:
+
+```bash
+gh api users/jansitarski/packages/container/wardrowbe-mcp --jq .visibility
+gh api users/jansitarski/packages/container/charts%2Fwardrowbe-mcp --jq .visibility
+# both should print: public
+```
+
+Also link each package to this repository (from the package page) so it inherits
+the repo README and access settings.
 
 ## Reporting security issues
 

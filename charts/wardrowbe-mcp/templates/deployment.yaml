@@ -1,5 +1,13 @@
-{{- if and (eq (toString .Values.config.transport) "http") (not .Values.apiKey.value) (not .Values.apiKey.existingSecret) }}
+{{- if ne (toString .Values.config.transport) "http" }}
+{{- fail "config.transport must be \"http\": a Deployment attaches nothing to stdin, so a stdio server would hit EOF and crash-loop (and the HTTP probes would fail regardless)" }}
+{{- end }}
+{{- if and (not .Values.apiKey.value) (not .Values.apiKey.existingSecret) }}
 {{- fail "config.transport=http requires an API key: set apiKey.value or apiKey.existingSecret" }}
+{{- end }}
+{{- if eq (toString .Values.config.auth) "oidc" }}
+{{- if or (not .Values.oidc.issuerUrl) (not .Values.oidc.clientId) (not .Values.oidc.existingSecret) }}
+{{- fail "config.auth=oidc requires oidc.issuerUrl, oidc.clientId and oidc.existingSecret (holding the client secret / refresh token)" }}
+{{- end }}
 {{- end }}
 apiVersion: apps/v1
 kind: Deployment
@@ -16,11 +24,26 @@ spec:
     metadata:
       labels:
         {{- include "wardrowbe-mcp.selectorLabels" . | nindent 8 }}
-      {{- with .Values.podAnnotations }}
+      {{- if or .Values.apiKey.value .Values.podAnnotations }}
       annotations:
+        {{- if .Values.apiKey.value }}
+        # Roll the Deployment when the chart-managed API key changes: rotating
+        # apiKey.value only updates the Secret, and env from secretKeyRef is
+        # resolved once at container start — without this, pods keep accepting
+        # the OLD key. (apiKey.existingSecret rotation still needs a manual
+        # `kubectl rollout restart`, or a tool like Reloader.)
+        # The rendered Secret manifest is hashed, never the bare key: pod
+        # annotations are readable with pod-only RBAC, and an unsalted digest
+        # of the credential would be brute-forceable offline.
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- end }}
+        {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
+        {{- end }}
       {{- end }}
     spec:
+      automountServiceAccountToken: {{ .Values.automountServiceAccountToken }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -51,25 +74,33 @@ spec:
             {{- toYaml . | nindent 12 }}
           {{- end }}
           args:
-            - --transport={{ .Values.config.transport }}
-            - --host={{ .Values.config.host }}
-            - --port={{ .Values.config.port }}
-            - --wardrowbe-url={{ required "config.wardrowbeUrl is required (the Wardrowbe backend base URL)" .Values.config.wardrowbeUrl }}
-            - --auth={{ .Values.config.auth }}
+            # Each arg is quoted as a single token so a value containing a space
+            # or newline can't split the rendered YAML array into extra entries.
+            - {{ printf "--transport=%s" (toString .Values.config.transport) | quote }}
+            - {{ printf "--host=%s" (toString .Values.config.host) | quote }}
+            - {{ printf "--port=%v" .Values.config.port | quote }}
+            - {{ printf "--wardrowbe-url=%s" (required "config.wardrowbeUrl is required (the Wardrowbe backend base URL)" .Values.config.wardrowbeUrl) | quote }}
+            - {{ printf "--auth=%s" (toString .Values.config.auth) | quote }}
             {{- with .Values.config.externalId }}
-            - --external-id={{ . }}
+            - {{ printf "--external-id=%s" (toString .) | quote }}
             {{- end }}
             {{- with .Values.config.externalEmail }}
-            - --external-email={{ . }}
+            - {{ printf "--external-email=%s" (toString .) | quote }}
+            {{- end }}
+            {{- with .Values.oidc.issuerUrl }}
+            - {{ printf "--oidc-issuer-url=%s" (toString .) | quote }}
+            {{- end }}
+            {{- with .Values.oidc.clientId }}
+            - {{ printf "--oidc-client-id=%s" (toString .) | quote }}
             {{- end }}
             {{- with .Values.config.portalResourceUrl }}
-            - --portal-resource-url={{ . }}
+            - {{ printf "--portal-resource-url=%s" (toString .) | quote }}
             {{- end }}
             {{- with .Values.config.maxConcurrent }}
-            - --max-concurrent={{ . }}
+            - {{ printf "--max-concurrent=%v" . | quote }}
             {{- end }}
             {{- with .Values.config.maxBodyMb }}
-            - --max-body-mb={{ . }}
+            - {{ printf "--max-body-mb=%v" . | quote }}
             {{- end }}
             {{- range .Values.config.extraArgs }}
             - {{ . | quote }}
@@ -80,9 +111,28 @@ spec:
                 secretKeyRef:
                   name: {{ include "wardrowbe-mcp.secretName" . }}
                   key: {{ .Values.apiKey.key }}
-                  # optional so a stdio/keyless deploy still starts; the http
-                  # path is gated by the fail() guard at the top of this file.
+                  # Required: a missing/typo'd Secret should fail pod creation
+                  # with a clear event, not start a server that rejects all
+                  # requests (or crash-loop opaquely on a missing key).
+                  optional: false
+            {{- with .Values.oidc.existingSecret }}
+            # OIDC secret material via env (never pod args). The client secret
+            # is optional (public clients have none); the refresh token is what
+            # OIDC mode cannot run without, so its absence should fail pod
+            # creation with a clear event instead of an opaque crash-loop.
+            - name: MCP_OIDC_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ . }}
+                  key: {{ $.Values.oidc.clientSecretKey }}
                   optional: true
+            - name: MCP_OIDC_REFRESH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ . }}
+                  key: {{ $.Values.oidc.refreshTokenKey }}
+                  optional: false
+            {{- end }}
             {{- range $k, $v := .Values.env }}
             - name: {{ $k }}
               value: {{ $v | quote }}

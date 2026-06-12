@@ -12,8 +12,8 @@ wardrowbe-mcp sits in front of a Wardrowbe deployment — Postgres + Redis + a F
 backend + an arq worker + a Next.js frontend — and exposes the backend API to Claude
 as MCP tools. Run one MCP server per backend; Claude connects to it.
 
-Claude can also **add items** through the server: `create_item_from_url` fetches a
-public image URL and `create_item_from_base64` takes an inline image, both uploading
+Claude can also **add items** through the server: `wardrowbe_create_item_from_url`
+fetches a public image URL and `wardrowbe_create_item_from_base64` takes an inline image, both uploading
 to the backend (which stores and auto-tags the garment) — so a wardrobe can be built
 or extended directly from chat, not just the web UI.
 
@@ -46,7 +46,8 @@ The MCP server authenticates to the backend via `POST /api/v1/auth/sync`, which 
 backend exposes in dev mode. Set on the backend:
 
 - `DEBUG=true`
-- `SECRET_KEY=change-me-in-production`
+- `SECRET_KEY=<a strong random secret — generate with: openssl rand -hex 32>`
+  (this signs backend JWTs; never use a placeholder/default value, even in dev)
 
 For the web login form to appear, also set `DEV_MODE=true` on the **frontend** — this
 is separate from the backend `DEBUG` flag.
@@ -78,14 +79,14 @@ and `AI_TEXT_MODEL`. Choosing models:
 - **Text** — only needs to emit valid JSON for the recommender, so a tiny model (e.g.
   `qwen2.5:1.5b`) is fine.
 
-Don't over-invest in the local model. Use `get_item_image` together with
-`set_item_tags` / `set_item_description` to have Claude tag items accurately on demand;
-the local model only needs to handle the upload-time auto-tag.
+Don't over-invest in the local model. Use `wardrowbe_get_item_image` together with
+`wardrowbe_set_item_tags` / `wardrowbe_set_item_description` to have Claude tag items
+accurately on demand; the local model only needs to handle the upload-time auto-tag.
 
 ## Connecting Claude
 
 - **Local** — run with `--transport stdio` (for a Claude Desktop config-file entry), or
-  with `--transport http` plus `--api-key` and register it:
+  with `--transport http` plus the `MCP_API_KEY` env var and register it:
 
   ```bash
   claude mcp add --transport http wardrowbe <url> --header "Authorization: Bearer $MCP_API_KEY"

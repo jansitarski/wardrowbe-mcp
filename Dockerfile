@@ -3,7 +3,9 @@
 # Build on the native builder arch and cross-compile to the target arch via
 # Go's GOOS/GOARCH (set from buildx's TARGET* args). CGO is disabled, so the
 # compile step needs no QEMU — only the final image layer is per-platform.
-FROM --platform=$BUILDPLATFORM golang:1.25 AS build
+# Base images are pinned by digest (the tag is kept for readability); Dependabot
+# bumps the digest when the tag moves.
+FROM --platform=$BUILDPLATFORM golang:1.25.11@sha256:379065f16fe8cce7949001ba9cffc827cd4b93d69495dec405befd1c13e19bb3 AS build
 ARG TARGETOS
 ARG TARGETARCH
 ARG VERSION=dev
@@ -15,8 +17,9 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath \
     -ldflags="-s -w -X 'github.com/jansitarski/wardrowbe-mcp/internal/mcpserver.serverVersion=${VERSION}'" \
     -o /out/wardrowbe-mcp ./cmd/wardrowbe-mcp
 
-FROM gcr.io/distroless/static-debian12:nonroot
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:d093aa3e30dbadd3efe1310db061a14da60299baff8450a17fe0ccc514a16639
 COPY --from=build /out/wardrowbe-mcp /wardrowbe-mcp
+COPY --from=build /src/LICENSE /LICENSE
 EXPOSE 8080
 USER nonroot:nonroot
 ENTRYPOINT ["/wardrowbe-mcp"]

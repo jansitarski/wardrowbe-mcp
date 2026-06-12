@@ -30,7 +30,7 @@ import (
 const tinyPNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M8AAAMBAQDJ/pLvAAAAAElFTkSuQmCC"
 
 // expectedToolCount must track the number of tools registered by registerTools.
-const expectedToolCount = 31
+const expectedToolCount = 32
 
 func mockBackend(t *testing.T) *httptest.Server {
 	t.Helper()
@@ -98,6 +98,12 @@ func mockBackend(t *testing.T) *httptest.Server {
 				}})
 				return
 			}
+			if len(seg) == 2 && seg[1] == "settings" {
+				writeJSON(w, 200, []any{
+					map[string]any{"id": "setting-1", "type": "wash_reminder", "enabled": true},
+				})
+				return
+			}
 			if len(seg) >= 4 && seg[1] == "settings" && seg[3] == "test" {
 				writeJSON(w, 200, map[string]any{"ok": true, "sent": true, "setting_id": seg[2]})
 				return
@@ -161,7 +167,7 @@ func mockBackend(t *testing.T) *httptest.Server {
 	return srv
 }
 
-func newTestClient(t *testing.T, backendURL string) *client.Client {
+func newTestClient(t *testing.T, backendURL string, opts ...func(*Server)) *client.Client {
 	t.Helper()
 	cfg := config.Config{
 		Transport: config.TransportStdio, AuthMode: config.AuthDev,
@@ -171,6 +177,9 @@ func newTestClient(t *testing.T, backendURL string) *client.Client {
 	provider := wardrowbe.DevTokenProvider{ExternalID: cfg.ExternalID, Email: cfg.ExternalEmail}
 	wc := wardrowbe.NewClient(backendURL, provider, &http.Client{Timeout: 10 * time.Second}, slog.Default())
 	srv := New(cfg, wc, slog.Default())
+	for _, opt := range opts {
+		opt(srv)
+	}
 
 	c, err := client.NewInProcessClient(srv.MCP())
 	if err != nil {
@@ -226,6 +235,11 @@ func TestAllToolsListed(t *testing.T) {
 	if len(lt.Tools) != expectedToolCount {
 		t.Fatalf("tool count = %d, want %d", len(lt.Tools), expectedToolCount)
 	}
+	for _, tool := range lt.Tools {
+		if !strings.HasPrefix(tool.Name, "wardrowbe_") {
+			t.Errorf("tool %q lacks the wardrowbe_ prefix", tool.Name)
+		}
+	}
 }
 
 func TestToolsHappyPath(t *testing.T) {
@@ -236,36 +250,38 @@ func TestToolsHappyPath(t *testing.T) {
 		args      map[string]any
 		wantImage bool
 	}{
-		{name: "health"},
-		{name: "auth_config"},
-		{name: "session_info"},
-		{name: "get_wardrobe_summary"},
-		{name: "get_most_worn_items", args: map[string]any{"limit": 3}},
-		{name: "recent_notifications", args: map[string]any{"limit": 5}},
-		{name: "test_notification", args: map[string]any{"setting_id": "setting-1"}},
-		{name: "list_items", args: map[string]any{"page": 1, "page_size": 10, "category": "shirt", "search": "blue"}},
-		{name: "get_item", args: map[string]any{"item_id": "item-1"}},
-		{name: "get_items_to_wash", args: map[string]any{"limit": 5}},
-		{name: "log_wear", args: map[string]any{"item_id": "item-1", "date": "2026-06-01"}},
-		{name: "log_wash", args: map[string]any{"item_id": "item-1"}},
-		{name: "archive_item", args: map[string]any{"item_id": "item-1", "reason": "worn out"}},
-		{name: "restore_item", args: map[string]any{"item_id": "item-1"}},
-		{name: "suggest_outfit", args: map[string]any{"occasion": "casual", "time_of_day": "morning", "notes": "light"}},
-		{name: "create_outfit", args: map[string]any{"item_ids": []any{"item-1", "item-2"}, "occasion": "casual", "name": "Test Fit"}},
-		{name: "get_latest_outfit"},
-		{name: "get_outfit", args: map[string]any{"outfit_id": "outfit-1"}},
-		{name: "delete_outfit", args: map[string]any{"outfit_id": "outfit-1"}},
-		{name: "get_recent_outfits", args: map[string]any{"limit": 5, "status": "accepted"}},
-		{name: "accept_latest_outfit"},
-		{name: "reject_latest_outfit"},
-		{name: "skip_latest_outfit"},
-		{name: "submit_outfit_feedback", args: map[string]any{"outfit_id": "outfit-1", "rating": 5, "wore": true, "notes": "great"}},
-		{name: "get_item_image", args: map[string]any{"item_id": "item-1", "variant": "medium"}, wantImage: true},
-		{name: "get_outfit_images", args: map[string]any{"outfit_id": "outfit-1", "variant": "medium"}, wantImage: true},
-		{name: "update_item", args: map[string]any{"item_id": "item-1", "name": "New", "primary_color": "navy", "colors": []any{"navy", "white"}, "wash_interval": 3, "favorite": true}},
-		{name: "set_item_tags", args: map[string]any{"item_id": "item-1", "colors": []any{"blue"}, "pattern": "solid", "material": "cotton", "style": []any{"smart-casual"}, "season": []any{"summer"}, "formality": "casual", "fit": "slim"}},
-		{name: "set_item_description", args: map[string]any{"item_id": "item-1", "description": "A nice blue shirt"}},
-		{name: "create_item_from_base64", args: map[string]any{"image_base64": tinyPNG, "filename": "shirt.png", "name": "Uploaded", "type": "shirt"}},
+		{name: "wardrowbe_health"},
+		{name: "wardrowbe_auth_config"},
+		{name: "wardrowbe_session_info"},
+		{name: "wardrowbe_get_wardrobe_summary"},
+		{name: "wardrowbe_get_most_worn_items", args: map[string]any{"limit": 3}},
+		{name: "wardrowbe_recent_notifications", args: map[string]any{"limit": 5}},
+		{name: "wardrowbe_list_notification_settings"},
+		{name: "wardrowbe_test_notification", args: map[string]any{"setting_id": "setting-1"}},
+		{name: "wardrowbe_list_items", args: map[string]any{"page": 1, "page_size": 10, "category": "shirt", "search": "blue"}},
+		{name: "wardrowbe_list_items"}, // zero-arg call must work (default page_size applies)
+		{name: "wardrowbe_get_item", args: map[string]any{"item_id": "item-1"}},
+		{name: "wardrowbe_get_items_to_wash", args: map[string]any{"limit": 5}},
+		{name: "wardrowbe_log_wear", args: map[string]any{"item_id": "item-1", "date": "2026-06-01"}},
+		{name: "wardrowbe_log_wash", args: map[string]any{"item_id": "item-1"}},
+		{name: "wardrowbe_archive_item", args: map[string]any{"item_id": "item-1", "reason": "worn out"}},
+		{name: "wardrowbe_restore_item", args: map[string]any{"item_id": "item-1"}},
+		{name: "wardrowbe_suggest_outfit", args: map[string]any{"occasion": "casual", "time_of_day": "morning", "notes": "light"}},
+		{name: "wardrowbe_create_outfit", args: map[string]any{"item_ids": []any{"item-1", "item-2"}, "occasion": "casual", "name": "Test Fit"}},
+		{name: "wardrowbe_get_latest_outfit"},
+		{name: "wardrowbe_get_outfit", args: map[string]any{"outfit_id": "outfit-1"}},
+		{name: "wardrowbe_delete_outfit", args: map[string]any{"outfit_id": "outfit-1"}},
+		{name: "wardrowbe_get_recent_outfits", args: map[string]any{"limit": 5, "status": "accepted"}},
+		{name: "wardrowbe_accept_latest_outfit"},
+		{name: "wardrowbe_reject_latest_outfit", args: map[string]any{"outfit_id": "outfit-2"}},
+		{name: "wardrowbe_skip_latest_outfit"},
+		{name: "wardrowbe_submit_outfit_feedback", args: map[string]any{"outfit_id": "outfit-1", "rating": 5, "wore": true, "notes": "great"}},
+		{name: "wardrowbe_get_item_image", args: map[string]any{"item_id": "item-1", "variant": "medium"}, wantImage: true},
+		{name: "wardrowbe_get_outfit_images", args: map[string]any{"outfit_id": "outfit-1", "variant": "medium"}, wantImage: true},
+		{name: "wardrowbe_update_item", args: map[string]any{"item_id": "item-1", "name": "New", "primary_color": "navy", "colors": []any{"navy", "white"}, "wash_interval": 3, "favorite": true}},
+		{name: "wardrowbe_set_item_tags", args: map[string]any{"item_id": "item-1", "colors": []any{"blue"}, "pattern": "solid", "material": "cotton", "style": []any{"smart-casual"}, "season": []any{"summer"}, "formality": "casual", "fit": "slim"}},
+		{name: "wardrowbe_set_item_description", args: map[string]any{"item_id": "item-1", "description": "A nice blue shirt"}},
+		{name: "wardrowbe_create_item_from_base64", args: map[string]any{"image_base64": tinyPNG, "filename": "shirt.png", "name": "Uploaded", "type": "shirt"}},
 	}
 
 	for _, tt := range cases {
@@ -298,16 +314,14 @@ func TestToolsHappyPath(t *testing.T) {
 // thus exercised end-to-end without outbound network.
 func TestCreateItemFromURL(t *testing.T) {
 	backend := mockBackend(t)
-	c := newTestClient(t, backend.URL)
+	// Inject a plain transport on this server instance so the in-process fetch can
+	// reach the loopback mock backend. The override is per-instance (no shared
+	// package state), so this is race-free and does not constrain t.Parallel.
+	c := newTestClient(t, backend.URL, func(s *Server) {
+		s.imageTransport = func() *http.Transport { return &http.Transport{} }
+	})
 
-	// Swaps the package-level imageFetchTransport. Tests in this package must run
-	// sequentially (do NOT add t.Parallel here or in tests sharing this var) — the
-	// -race CI step would otherwise flag the unsynchronized read/write.
-	orig := imageFetchTransport
-	imageFetchTransport = func() *http.Transport { return &http.Transport{} }
-	t.Cleanup(func() { imageFetchTransport = orig })
-
-	res := call(t, c, "create_item_from_url", map[string]any{
+	res := call(t, c, "wardrowbe_create_item_from_url", map[string]any{
 		"image_url": backend.URL + "/media/x.png", "name": "From URL",
 	})
 	if res.IsError {
@@ -319,7 +333,7 @@ func TestCreateItemFromURL(t *testing.T) {
 }
 
 // TestToolGuards asserts the validation/SSRF guards reject bad input. These run
-// with the real SSRF-guarded transport (imageFetchTransport is not overridden).
+// with the real SSRF-guarded transport (the real ssrfTransport is used).
 func TestToolGuards(t *testing.T) {
 	c := newTestClient(t, mockBackend(t).URL)
 
@@ -328,13 +342,22 @@ func TestToolGuards(t *testing.T) {
 		args map[string]any
 		want string // substring expected in the error text
 	}{
-		{"create_item_from_url", map[string]any{"image_url": "http://127.0.0.1:1/x.png"}, "non-public"},
-		{"create_item_from_url", map[string]any{"image_url": "file:///etc/passwd"}, "http(s)"},
-		{"suggest_outfit", map[string]any{"occasion": "spacewalk"}, "invalid occasion"},
-		{"create_outfit", map[string]any{"item_ids": []any{"item-1", ""}, "occasion": "casual"}, "empty values"},
-		{"log_wear", map[string]any{"item_id": "item-1", "date": "06-2026"}, "YYYY-MM-DD"},
-		{"get_item", map[string]any{}, "item_id is required"},
-		{"create_item_from_base64", map[string]any{"image_base64": base64.StdEncoding.EncodeToString([]byte("not-an-image"))}, "not an image"},
+		{"wardrowbe_create_item_from_url", map[string]any{"image_url": "http://127.0.0.1:1/x.png"}, "non-public"},
+		{"wardrowbe_create_item_from_url", map[string]any{"image_url": "file:///etc/passwd"}, "http(s)"},
+		{"wardrowbe_suggest_outfit", map[string]any{"occasion": "spacewalk"}, "invalid occasion"},
+		{"wardrowbe_create_outfit", map[string]any{"item_ids": []any{"item-1", ""}, "occasion": "casual"}, "empty values"},
+		{"wardrowbe_log_wear", map[string]any{"item_id": "item-1", "date": "06-2026"}, "YYYY-MM-DD"},
+		{"wardrowbe_log_wear", map[string]any{"item_id": "item-1", "date": "2026-6-1"}, "YYYY-MM-DD"},
+		{"wardrowbe_get_item", map[string]any{}, "item_id is required"},
+		{"wardrowbe_get_item", map[string]any{"item_id": "  "}, "non-empty"},
+		{"wardrowbe_get_outfit", map[string]any{"outfit_id": ""}, "non-empty"},
+		{"wardrowbe_submit_outfit_feedback", map[string]any{"outfit_id": "outfit-1", "rating": 9}, "between 1 and 5"},
+		{"wardrowbe_update_item", map[string]any{"item_id": "item-1", "favorite": "yes"}, "must be a boolean"},
+		{"wardrowbe_update_item", map[string]any{"item_id": "item-1", "wash_interval": 0}, ">= 1"},
+		{"wardrowbe_get_recent_outfits", map[string]any{"status": "weird"}, "invalid status"},
+		{"wardrowbe_archive_item", map[string]any{"item_id": "item-1", "reason": strings.Repeat("x", 51)}, "too long"},
+		{"wardrowbe_get_item_image", map[string]any{"item_id": "item-1", "variant": "huge"}, "invalid variant"},
+		{"wardrowbe_create_item_from_base64", map[string]any{"image_base64": base64.StdEncoding.EncodeToString([]byte("not-an-image"))}, "not an image"},
 	}
 	for _, tt := range cases {
 		t.Run(tt.name+"_"+tt.want, func(t *testing.T) {

@@ -19,11 +19,21 @@ fmt:
 	gofmt -w .
 
 lint: vet
-	gofmt -l .
+	@unformatted=$$(gofmt -l .); \
+	if [ -n "$$unformatted" ]; then \
+		echo "These files are not gofmt-clean:"; echo "$$unformatted"; exit 1; \
+	fi
 
 run: build
-	./$(BINARY) --transport http --port 8080 \
-		--wardrowbe-url $(WARDROWBE_URL) --api-key $(MCP_API_KEY)
+ifndef WARDROWBE_URL
+	$(error WARDROWBE_URL is not set (e.g. make run WARDROWBE_URL=http://127.0.0.1:8000 MCP_API_KEY=dev-key))
+endif
+ifndef MCP_API_KEY
+	$(error MCP_API_KEY is not set (e.g. make run WARDROWBE_URL=http://127.0.0.1:8000 MCP_API_KEY=dev-key))
+endif
+	@# The key goes via the environment, not argv, so it never shows up in `ps`.
+	MCP_API_KEY='$(MCP_API_KEY)' ./$(BINARY) --transport http --port 8080 \
+		--wardrowbe-url $(WARDROWBE_URL)
 
 docker:
 	docker build --build-arg VERSION=$(VERSION) -t $(IMAGE):$(VERSION) .

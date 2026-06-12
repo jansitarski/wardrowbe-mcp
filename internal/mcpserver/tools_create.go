@@ -8,11 +8,13 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"path"
 	"strings"
 	"time"
 
+	"github.com/jansitarski/wardrowbe-mcp/internal/wardrowbe"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
@@ -30,21 +32,23 @@ const (
 	// by the SSRF dialer; this caps the chain length as defense-in-depth (a
 	// legitimate CDN may 302 once to a signed URL, but not many times).
 	maxImageRedirects = 5
-	// browserUA avoids naive hotlink/User-Agent blocks on retail CDNs.
+	// browserUA avoids naive hotlink/User-Agent blocks on retail CDNs. It is kept
+	// generic (no product/host identifier) so outbound fetches don't fingerprint
+	// this server to every CDN it reaches.
 	browserUA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 " +
-		"(KHTML, like Gecko) Chrome/124.0 Safari/537.36 wardrowbe-mcp"
+		"(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 )
 
 func (s *Server) registerCreateTools() {
-	s.add(mcp.NewTool("create_item_from_url",
+	s.add(mcp.NewTool("wardrowbe_create_item_from_url",
 		mcp.WithDescription("Create a wardrobe item from a public image URL. The server downloads the "+
 			"image and uploads it to Wardrowbe (the backend then auto-tags it). Use this to add a "+
-			"garment from a product/photo link; afterwards refine attributes with get_item_image + "+
-			"set_item_tags/set_item_description. Note: only http(s) URLs to public hosts are allowed, "+
-			"and Claude cannot upload an image pasted into the chat — pass a URL. If the photo is only "+
-			"on local disk, either use create_item_from_base64, or upload it to a temporary public host "+
-			"such as litterbox.catbox.moe (POST reqtype=fileupload, time=1h, fileToUpload=@photo to "+
-			"https://litterbox.catbox.moe/resources/internals/api.php) and pass the returned 1-hour URL."),
+			"garment from a product/photo link; afterwards refine attributes with wardrowbe_get_item_image + "+
+			"wardrowbe_set_item_tags/wardrowbe_set_item_description. Only http(s) URLs to public hosts are "+
+			"allowed, and an image pasted into the chat cannot be passed here — for a local or pasted "+
+			"photo use wardrowbe_create_item_from_base64 instead. Never upload someone's private photos "+
+			"to a third-party host to obtain a URL without their explicit consent."),
+		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithString("image_url", mcp.Required(), mcp.Description("Public http(s) URL of the garment image.")),
 		mcp.WithString("name", mcp.Description("Optional item name.")),
 		mcp.WithString("type", mcp.Description("Optional item type (e.g. shirt, pants, jacket).")),
@@ -55,13 +59,15 @@ func (s *Server) registerCreateTools() {
 		mcp.WithBoolean("favorite", mcp.Description("Mark as favorite. Default false.")),
 	), s.handleCreateItemFromURL)
 
-	s.add(mcp.NewTool("create_item_from_base64",
+	s.add(mcp.NewTool("wardrowbe_create_item_from_base64",
 		mcp.WithDescription("Create a wardrobe item from a base64-encoded image supplied inline. Use this "+
 			"when the image lives on the local machine (read the file and pass its bytes as base64) and "+
-			"there is no public URL to give create_item_from_url. The backend auto-tags the uploaded "+
-			"image; afterwards refine attributes with get_item_image + set_item_tags/set_item_description. "+
-			"Accepts a raw base64 string or a data URL (data:image/...;base64,...). Keep images reasonably "+
-			"small — the decoded size is capped at 20 MiB and large payloads may exceed message limits."),
+			"there is no public URL to give wardrowbe_create_item_from_url. The backend auto-tags the uploaded "+
+			"image; afterwards refine attributes with wardrowbe_get_item_image + wardrowbe_set_item_tags/"+
+			"wardrowbe_set_item_description. Accepts a raw base64 string or a data URL "+
+			"(data:image/...;base64,...). Keep images reasonably small — the decoded size is capped at "+
+			"20 MiB and large payloads may exceed message limits."),
+		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithString("image_base64", mcp.Required(), mcp.Description("Base64-encoded image bytes, or a "+
 			"full data URL (data:image/png;base64,...).")),
 		mcp.WithString("filename", mcp.Description("Optional original filename (used to label the upload).")),
@@ -81,14 +87,18 @@ func (s *Server) handleCreateItemFromURL(ctx context.Context, req mcp.CallToolRe
 		return mcp.NewToolResultError("image_url is required"), nil
 	}
 
-	data, mime, filename, err := fetchExternalImage(ctx, imageURL)
+	data, mime, filename, err := fetchExternalImage(ctx, imageURL, s.imageHTTPTransport())
 	if err != nil {
 		return mcp.NewToolResultErrorFromErr("could not fetch image", err), nil
 	}
 
-	raw, err := s.client.CreateItemFromImage(ctx, data, filename, mime, itemFields(req))
+	fields, errRes := itemFields(req)
+	if errRes != nil {
+		return errRes, nil
+	}
+	raw, err := s.client.CreateItemFromImage(ctx, data, filename, mime, fields)
 	if err != nil {
-		return mcp.NewToolResultErrorFromErr("create item failed", err), nil
+		return toolErr("create item failed", err), nil
 	}
 	// Log only the host, not the full URL — retail/CDN URLs often carry signed
 	// tokens or tracking params we don't want in production logs.
@@ -112,26 +122,32 @@ func (s *Server) handleCreateItemFromBase64(ctx context.Context, req mcp.CallToo
 		filename = "item" + extForMIME(mime)
 	}
 
-	result, err := s.client.CreateItemFromImage(ctx, data, filename, mime, itemFields(req))
+	fields, errRes := itemFields(req)
+	if errRes != nil {
+		return errRes, nil
+	}
+	result, err := s.client.CreateItemFromImage(ctx, data, filename, mime, fields)
 	if err != nil {
-		return mcp.NewToolResultErrorFromErr("create item failed", err), nil
+		return toolErr("create item failed", err), nil
 	}
 	s.log.Info("created item from base64", "filename", filename, "bytes", len(data), "mime", mime)
 	return jsonText(result), nil
 }
 
 // itemFields collects the optional item attributes shared by the create tools.
-func itemFields(req mcp.CallToolRequest) map[string]string {
+func itemFields(req mcp.CallToolRequest) (map[string]string, *mcp.CallToolResult) {
 	fields := map[string]string{}
 	for _, k := range []string{"name", "type", "subtype", "brand", "notes", "primary_color"} {
 		if v := req.GetString(k, ""); v != "" {
 			fields[k] = v
 		}
 	}
-	if _, ok := req.GetArguments()["favorite"]; ok {
-		fields["favorite"] = boolStr(req.GetBool("favorite", false))
+	if fav, present, errRes := argBool(req, "favorite"); errRes != nil {
+		return nil, errRes
+	} else if present {
+		fields["favorite"] = boolStr(fav)
 	}
-	return fields
+	return fields, nil
 }
 
 // decodeBase64Image decodes a raw base64 string or a data URL, enforces the
@@ -168,8 +184,13 @@ func decodeBase64Image(raw string) ([]byte, string, error) {
 		return nil, "", fmt.Errorf("image exceeds %d MiB limit", maxImageBytes>>20)
 	}
 
+	// The declared MIME comes straight from caller input and later lands in a
+	// multipart header; accept only a strict image/<token> form (no whitespace,
+	// control characters or parameters) and otherwise sniff the real type.
+	// The token rule is shared with the client layer (wardrowbe.ValidMIMEType),
+	// which re-screens whatever reaches the multipart writer.
 	mime := declaredMIME
-	if !strings.HasPrefix(mime, "image/") {
+	if !wardrowbe.ValidMIMEType(mime) || !strings.HasPrefix(mime, "image/") {
 		mime = http.DetectContentType(data)
 	}
 	if !strings.HasPrefix(mime, "image/") {
@@ -205,8 +226,10 @@ func hostOnly(rawURL string) string {
 
 // fetchExternalImage downloads an image from a public URL with an SSRF guard
 // (http(s) only, no private/loopback addresses), a size cap, and a content-type
-// check. Returns the bytes, sniffed MIME, and a sensible filename.
-func fetchExternalImage(ctx context.Context, rawURL string) ([]byte, string, string, error) {
+// check. Returns the bytes, sniffed MIME, and a sensible filename. transport is
+// shared across calls — building one per fetch would let a keep-alive-holding
+// image host pin a connection (fd + goroutines) per call indefinitely.
+func fetchExternalImage(ctx context.Context, rawURL string, transport *http.Transport) ([]byte, string, string, error) {
 	u, err := url.Parse(strings.TrimSpace(rawURL))
 	if err != nil {
 		return nil, "", "", fmt.Errorf("invalid url: %w", err)
@@ -217,8 +240,14 @@ func fetchExternalImage(ctx context.Context, rawURL string) ([]byte, string, str
 
 	client := &http.Client{
 		Timeout:   imageFetchTimeout,
-		Transport: imageFetchTransport(),
-		CheckRedirect: func(_ *http.Request, via []*http.Request) error {
+		Transport: transport,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			// Re-validate the scheme on every hop: a 3xx can try to bounce us to a
+			// non-http(s) scheme, and the initial-URL check above does not cover
+			// redirect targets. (The SSRF dialer still re-checks the resolved IP.)
+			if req.URL.Scheme != "http" && req.URL.Scheme != "https" {
+				return fmt.Errorf("refusing redirect to non-http(s) scheme %q", req.URL.Scheme)
+			}
 			if len(via) >= maxImageRedirects {
 				return fmt.Errorf("stopped after %d redirects", maxImageRedirects)
 			}
@@ -274,13 +303,6 @@ func fetchExternalImage(ctx context.Context, rawURL string) ([]byte, string, str
 	return data, mime, filenameFor(u, mime), nil
 }
 
-// imageFetchTransport builds the HTTP transport used for external image fetches.
-// Production always uses the SSRF-guarded transport (ssrfTransport); it is a
-// package-private var solely so the in-package integration test can fetch from a
-// loopback test server. Overriding it requires in-package code, so it is not a
-// runtime attack surface.
-var imageFetchTransport = ssrfTransport
-
 // ssrfTransport returns an http transport whose dialer refuses to connect to
 // private, loopback, link-local or unspecified addresses — checked on the IP
 // actually dialed, which defeats DNS-rebinding.
@@ -288,6 +310,10 @@ func ssrfTransport() *http.Transport {
 	dialer := &net.Dialer{Timeout: 10 * time.Second}
 	return &http.Transport{
 		TLSHandshakeTimeout: 10 * time.Second,
+		// The transport is shared across fetches; bound how long an idle
+		// keep-alive connection to an arbitrary external host may linger.
+		IdleConnTimeout: 30 * time.Second,
+		MaxIdleConns:    8,
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			host, port, err := net.SplitHostPort(addr)
 			if err != nil {
@@ -307,14 +333,33 @@ func ssrfTransport() *http.Transport {
 	}
 }
 
+// blockedPrefixes are non-public ranges that net.IP's own predicates don't
+// cover: IPv4 carrier-grade NAT (RFC 6598, commonly internal) and the NAT64
+// well-known prefix (RFC 6052) — NAT64 addresses embed an IPv4 target that a
+// NAT64 gateway would translate, which can reach internal IPv4 ranges the
+// IPv6 checks don't see. Declared as CIDR strings so each entry is reviewable
+// against its RFC.
+var blockedPrefixes = []netip.Prefix{
+	netip.MustParsePrefix("100.64.0.0/10"),
+	netip.MustParsePrefix("64:ff9b::/96"),
+}
+
 func isPublicIP(ip net.IP) bool {
+	// IsMulticast covers every multicast scope (link-, site-, org-, global- and
+	// interface-local), not just the link-local range.
 	if ip == nil || ip.IsLoopback() || ip.IsPrivate() ||
-		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
+		ip.IsLinkLocalUnicast() || ip.IsMulticast() || ip.IsUnspecified() {
 		return false
 	}
-	// Block IPv4 carrier-grade NAT (100.64.0.0/10), commonly internal.
-	if v4 := ip.To4(); v4 != nil && v4[0] == 100 && v4[1] >= 64 && v4[1] <= 127 {
+	addr, ok := netip.AddrFromSlice(ip)
+	if !ok {
 		return false
+	}
+	addr = addr.Unmap() // 4-in-6 form must match the IPv4 prefixes
+	for _, p := range blockedPrefixes {
+		if p.Contains(addr) {
+			return false
+		}
 	}
 	return true
 }

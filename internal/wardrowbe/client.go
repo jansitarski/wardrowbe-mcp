@@ -25,6 +25,11 @@ const apiBase = "/api/v1"
 // refreshLeeway is subtracted from the token TTL so we re-sync before expiry.
 const refreshLeeway = 30 * time.Second
 
+// syncTimeout bounds a coalesced token refresh. The refresh runs on a context
+// detached from the leader's request (its result is shared with every waiter),
+// so it needs its own deadline.
+const syncTimeout = 30 * time.Second
+
 // maxAPIResponseBytes caps how much of a backend JSON response we buffer, so a
 // misbehaving or compromised backend cannot exhaust memory.
 const maxAPIResponseBytes = 16 << 20 // 16 MiB
@@ -69,8 +74,10 @@ func readBoundedBody(r io.Reader) ([]byte, error) {
 }
 
 // Client is the authenticated Wardrowbe backend HTTP client. It mirrors the
-// Python WardrowbeClient: a mutex-guarded JWT cache that re-syncs on expiry and
-// retries once on a 401.
+// Python WardrowbeClient: a JWT cache that re-syncs on expiry and retries once
+// on a 401. Token refreshes are coalesced: one goroutine performs the network
+// round trip while peers wait on a latch they can abandon when their own ctx
+// is cancelled — the cache mutex is never held across a network call.
 type Client struct {
 	baseURL  string
 	http     *http.Client
@@ -80,6 +87,15 @@ type Client struct {
 	mu        sync.Mutex
 	token     string
 	expiresAt time.Time
+	inflight  *syncFlight // non-nil while a token sync is running
+}
+
+// syncFlight is one in-progress token refresh. token/err are written by the
+// leader before done is closed; waiters read them only after <-done.
+type syncFlight struct {
+	done  chan struct{}
+	token string
+	err   error
 }
 
 // NewClient builds a Client. httpClient must have sane timeouts configured by
@@ -99,38 +115,87 @@ func NewClient(baseURL string, provider TokenProvider, httpClient *http.Client, 
 	}
 }
 
-// token returns a valid JWT, syncing if the cache is empty or near expiry.
+// ensureToken returns a valid JWT, syncing if the cache is empty or near expiry.
 func (c *Client) ensureToken(ctx context.Context) (string, error) {
+	return c.tokenFor(ctx, "")
+}
+
+// tokenFor returns a cached valid token. badToken, when non-empty, is a token
+// that just got a 401: if it still matches the cache the cache is stale and a
+// re-sync is forced; if a peer already replaced it, the fresh cached token is
+// returned without another /auth/sync (avoids a re-sync herd when many
+// concurrent requests 401 at once). Refreshes are single-flight and run
+// detached from any one caller's context; every caller (leader included)
+// honors its own ctx cancellation instead of blocking on a mutex.
+func (c *Client) tokenFor(ctx context.Context, badToken string) (string, error) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.token != "" && time.Now().Before(c.expiresAt) {
-		return c.token, nil
+	if c.token != "" && c.token != badToken && time.Now().Before(c.expiresAt) {
+		token := c.token
+		c.mu.Unlock()
+		return token, nil
 	}
-	return c.syncLocked(ctx)
-}
 
-// forceSync clears the cached token and syncs again (used after a 401).
-func (c *Client) forceSync(ctx context.Context) (string, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	if fl := c.inflight; fl != nil {
+		c.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-fl.done:
+		}
+		return fl.token, fl.err
+	}
+
+	fl := &syncFlight{done: make(chan struct{})}
+	c.inflight = fl
 	c.token = ""
-	return c.syncLocked(ctx)
+	c.mu.Unlock()
+
+	// Run the sync detached from the leader's request context: its result is
+	// shared with every coalesced waiter, so one cancelled caller (a dropped
+	// MCP client, an aborted /readyz probe) must not fail requests whose own
+	// contexts are still live. WithoutCancel keeps the parent's values; the
+	// sync gets its own deadline instead. The leader waits on the latch like
+	// any other caller, honoring its own ctx.
+	go func() {
+		syncCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), syncTimeout)
+		defer cancel()
+		token, expiresAt, err := c.doSync(syncCtx)
+
+		c.mu.Lock()
+		if err == nil {
+			c.token = token
+			c.expiresAt = expiresAt
+		}
+		c.inflight = nil
+		c.mu.Unlock()
+
+		fl.token, fl.err = token, err
+		close(fl.done)
+	}()
+
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	case <-fl.done:
+	}
+	return fl.token, fl.err
 }
 
-// syncLocked performs POST /auth/sync. Caller must hold c.mu.
-func (c *Client) syncLocked(ctx context.Context) (string, error) {
+// doSync performs POST /auth/sync and returns the new token and its cache
+// deadline. It must not touch the token cache — tokenFor owns that.
+func (c *Client) doSync(ctx context.Context) (string, time.Time, error) {
 	payload, err := c.provider.SyncPayload(ctx)
 	if err != nil {
-		return "", fmt.Errorf("auth sync: %w", err)
+		return "", time.Time{}, fmt.Errorf("auth sync: %w", err)
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return "", fmt.Errorf("auth sync: marshal payload: %w", err)
+		return "", time.Time{}, fmt.Errorf("auth sync: marshal payload: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+apiBase+"/auth/sync", bytes.NewReader(body))
 	if err != nil {
-		return "", fmt.Errorf("auth sync: build request: %w", err)
+		return "", time.Time{}, fmt.Errorf("auth sync: build request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
@@ -138,31 +203,29 @@ func (c *Client) syncLocked(ctx context.Context) (string, error) {
 	resp, err := c.http.Do(req)
 	if err != nil {
 		c.log.Debug("auth sync request failed", "err", err)
-		return "", fmt.Errorf("auth sync: request failed")
+		return "", time.Time{}, fmt.Errorf("auth sync: request failed")
 	}
 	defer resp.Body.Close()
 	raw, err := readBoundedBody(resp.Body)
 	if err != nil {
-		return "", fmt.Errorf("auth sync: read body: %w", err)
+		return "", time.Time{}, fmt.Errorf("auth sync: read body: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		c.log.Debug("auth sync failed", "status", resp.StatusCode, "body", string(raw))
-		return "", &APIError{StatusCode: resp.StatusCode, Method: http.MethodPost, Path: "/auth/sync", Body: string(raw)}
+		return "", time.Time{}, &APIError{StatusCode: resp.StatusCode, Method: http.MethodPost, Path: "/auth/sync", Body: string(raw)}
 	}
 
 	var sr syncResponse
 	if err := json.Unmarshal(raw, &sr); err != nil {
-		return "", fmt.Errorf("auth sync: decode response: %w", err)
+		return "", time.Time{}, fmt.Errorf("auth sync: decode response: %w", err)
 	}
 	if sr.AccessToken == "" {
-		return "", fmt.Errorf("auth sync: empty access_token")
+		return "", time.Time{}, fmt.Errorf("auth sync: empty access_token")
 	}
 
 	ttl := tokenTTL(sr)
-	c.token = sr.AccessToken
-	c.expiresAt = time.Now().Add(ttl)
 	c.log.Debug("backend token synced", "external_id", payload.ExternalID, "ttl_s", int(ttl.Seconds()))
-	return c.token, nil
+	return sr.AccessToken, time.Now().Add(ttl), nil
 }
 
 // tokenTTL decides how long to cache an access token. It prefers expires_in,
@@ -225,6 +288,14 @@ type apiRequest struct {
 // raw response body. On a 401 it re-syncs once and retries; a second 401 is an
 // auth error. A 204 returns a nil body.
 func (c *Client) Request(ctx context.Context, method, path string, query url.Values, body any) (json.RawMessage, error) {
+	// Backstop against empty path segments: an empty id turns "/items/{id}"
+	// into "/items/", which the backend redirects to the whole collection —
+	// silently returning the wrong data. Tool handlers validate ids up front
+	// (requireID); this catches any future call site that forgets.
+	if strings.HasSuffix(path, "/") || strings.Contains(path, "//") {
+		return nil, fmt.Errorf("invalid api path %q (empty path segment)", path)
+	}
+
 	var encoded []byte
 	contentType := ""
 	if body != nil {
@@ -246,13 +317,13 @@ func (c *Client) Request(ctx context.Context, method, path string, query url.Val
 // yields a nil body; any non-2xx yields an *APIError whose message omits the
 // backend body so backend internals never reach the caller.
 func (c *Client) execute(ctx context.Context, r apiRequest) (json.RawMessage, error) {
-	raw, status, err := c.attempt(ctx, r, false)
+	raw, status, usedToken, err := c.attempt(ctx, r, "")
 	if err != nil {
 		return nil, err
 	}
 	if status == http.StatusUnauthorized {
 		c.log.Debug("backend 401, re-syncing token", "path", r.path)
-		raw, status, err = c.attempt(ctx, r, true)
+		raw, status, _, err = c.attempt(ctx, r, usedToken)
 		if err != nil {
 			return nil, err
 		}
@@ -267,18 +338,13 @@ func (c *Client) execute(ctx context.Context, r apiRequest) (json.RawMessage, er
 	return raw, nil
 }
 
-// attempt performs a single request. When forceResync is true a fresh token is
-// fetched first (used on retry after a 401).
-func (c *Client) attempt(ctx context.Context, r apiRequest, forceResync bool) (json.RawMessage, int, error) {
-	var token string
-	var err error
-	if forceResync {
-		token, err = c.forceSync(ctx)
-	} else {
-		token, err = c.ensureToken(ctx)
-	}
+// attempt performs a single request and reports the bearer token it used.
+// badToken, when non-empty, marks the token that just received a 401 so the
+// token cache refreshes only if no peer already did (see tokenFor).
+func (c *Client) attempt(ctx context.Context, r apiRequest, badToken string) (json.RawMessage, int, string, error) {
+	token, err := c.tokenFor(ctx, badToken)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, "", err
 	}
 
 	var reader io.Reader
@@ -288,7 +354,7 @@ func (c *Client) attempt(ctx context.Context, r apiRequest, forceResync bool) (j
 
 	req, err := http.NewRequestWithContext(ctx, r.method, r.reqURL, reader)
 	if err != nil {
-		return nil, 0, fmt.Errorf("build request: %w", err)
+		return nil, 0, token, fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "application/json")
@@ -301,14 +367,14 @@ func (c *Client) attempt(ctx context.Context, r apiRequest, forceResync bool) (j
 		// Don't surface raw transport errors (they embed internal hostnames/IPs)
 		// to the MCP caller; log them and return a generic message.
 		c.log.Debug("backend request failed", "method", r.method, "path", r.path, "err", err)
-		return nil, 0, fmt.Errorf("backend %s %s: request failed", r.method, r.path)
+		return nil, 0, token, fmt.Errorf("backend %s %s: request failed", r.method, r.path)
 	}
 	defer resp.Body.Close()
 	raw, err := readBoundedBody(resp.Body)
 	if err != nil {
-		return nil, resp.StatusCode, fmt.Errorf("%s %s: read body: %w", r.method, r.path, err)
+		return nil, resp.StatusCode, token, fmt.Errorf("%s %s: read body: %w", r.method, r.path, err)
 	}
-	return raw, resp.StatusCode, nil
+	return raw, resp.StatusCode, token, nil
 }
 
 // UpdateItem PATCHes an item and returns the raw updated item payload.
@@ -326,6 +392,14 @@ func (c *Client) CreateStudioOutfit(ctx context.Context, outfit StudioOutfit) (j
 // multipart/form-data to POST /items and returns the raw created item. The
 // backend stores the image and queues AI auto-tagging.
 func (c *Client) CreateItemFromImage(ctx context.Context, data []byte, filename, mime string, fields map[string]string) (json.RawMessage, error) {
+	// The MIME string can originate from a caller-supplied data URL and is
+	// written verbatim into a multipart part header, which the multipart
+	// package does not validate — a CR/LF inside it would inject extra
+	// headers. Accept only a strict type/subtype token; otherwise sniff.
+	if !validMIMEType.MatchString(mime) {
+		mime = http.DetectContentType(data)
+	}
+
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
 
@@ -359,6 +433,17 @@ func (c *Client) CreateItemFromImage(ctx context.Context, data []byte, filename,
 
 // unsafeFilenameChars matches anything outside a conservative filename charset.
 var unsafeFilenameChars = regexp.MustCompile(`[^A-Za-z0-9._-]`)
+
+// validMIMEType matches a single conservative type/subtype token pair (RFC 2045
+// tokens, no parameters), rejecting whitespace, control characters and anything
+// that could smuggle a header line.
+var validMIMEType = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,126}/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,126}$`)
+
+// ValidMIMEType reports whether s is a single conservative type/subtype token
+// pair (no parameters, no whitespace/control characters) — safe to embed in a
+// multipart header. Shared with the MCP layer so caller-supplied MIME strings
+// are screened by one rule everywhere.
+func ValidMIMEType(s string) bool { return validMIMEType.MatchString(s) }
 
 // sanitizeFilename reduces a (possibly user-supplied) filename to a safe charset
 // and bounded length, preventing header/MIME-parameter injection in the upload.

@@ -5,18 +5,20 @@ on:
     branches: [master]
   pull_request:
 
-permissions:
-  contents: read
+# Default to no permissions; each job opts in to exactly what it needs.
+permissions: {}
 
 jobs:
   build-test:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
-          go-version: '1.25'
+          go-version: '1.25.11'
           cache: true
 
       - name: Verify formatting
@@ -40,12 +42,74 @@ jobs:
       - name: Integration test (every tool, end-to-end)
         run: go test -tags integration -race ./internal/mcpserver/
 
+  security:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      # Both scanners run under our own Go toolchain rather than their wrapper
+      # actions: the gosec container action bundles an older Go that cannot
+      # load a go.mod requiring 1.25.11, and govulncheck-action performs its
+      # own internal checkout, which conflicts with the credentials the
+      # workflow's checkout (v6) already configured (git fetch fails with 400).
+      # `go install` verifies the govulncheck binary against the Go module
+      # sumdb; the gosec tarball is checksum-pinned.
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version: '1.25.11'
+          cache: true
+
+      - name: govulncheck (known stdlib/dep vulnerabilities)
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.3.0
+          "$(go env GOPATH)/bin/govulncheck" ./...
+
+      - name: gosec (static security analysis)
+        env:
+          GOSEC_VERSION: 2.27.1
+          # From gosec_2.27.1_checksums.txt on the release; update together.
+          GOSEC_SHA256: a1cc5fba45fb51131ba05dee4029b364f62f4b6739b8f24236f93de82f40da40
+        run: |
+          curl -sSfL "https://github.com/securego/gosec/releases/download/v${GOSEC_VERSION}/gosec_${GOSEC_VERSION}_linux_amd64.tar.gz" -o /tmp/gosec.tgz
+          echo "${GOSEC_SHA256}  /tmp/gosec.tgz" | sha256sum -c -
+          tar -C /tmp -xzf /tmp/gosec.tgz gosec
+          /tmp/gosec ./...
+
+  docker:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - uses: docker/setup-qemu-action@06116385d9baf250c9f4dcb4858b16962ea869c3 # v4.1.0
+
+      - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+
+      # Smoke-build the image (no push) so Dockerfile breakage — Go-version
+      # drift, .dockerignore changes, the arm64 cross-build — surfaces on PRs
+      # instead of at tag time.
+      - name: Build image (no push)
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: false
+          build-args: |
+            VERSION=ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
   helm:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@dda3372f752e03dde6b3237bc9431cdc2f7a02a2 # v5
 
       - name: Lint chart
         run: |

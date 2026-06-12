@@ -101,43 +101,58 @@ func (c *Client) resolveImageURL(fields map[string]any, keys struct{ urlKey, pat
 }
 
 func (c *Client) fetchImageBytes(ctx context.Context, imageURL string, authed bool) ([]byte, string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, imageURL, nil)
-	if err != nil {
-		return nil, "", fmt.Errorf("build image request: %w", err)
-	}
-	if authed {
-		token, err := c.ensureToken(ctx)
+	// Mirror execute()'s 401 handling: re-sync the token once and retry, so an
+	// image fetch racing token expiry doesn't fail where a JSON call would not.
+	badToken := ""
+	for attempt := 0; ; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, imageURL, nil)
 		if err != nil {
-			return nil, "", err
+			return nil, "", fmt.Errorf("build image request: %w", err)
 		}
-		req.Header.Set("Authorization", "Bearer "+token)
-	}
+		token := ""
+		if authed {
+			token, err = c.tokenFor(ctx, badToken)
+			if err != nil {
+				return nil, "", err
+			}
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
 
-	resp, err := c.http.Do(req)
-	if err != nil {
-		c.log.Debug("image fetch request failed", "err", err)
-		return nil, "", fmt.Errorf("fetch image: request failed")
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		// Read only a small slice of an error body for diagnostics.
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		c.log.Debug("image fetch failed", "status", resp.StatusCode, "body", string(body))
-		return nil, "", &APIError{StatusCode: resp.StatusCode, Method: http.MethodGet, Path: "image", Body: string(body)}
-	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, maxImageReadBytes+1))
-	if err != nil {
-		return nil, "", fmt.Errorf("read image bytes: %w", err)
-	}
-	if len(data) > maxImageReadBytes {
-		return nil, "", fmt.Errorf("image exceeds %d MiB limit", maxImageReadBytes>>20)
-	}
+		resp, err := c.http.Do(req)
+		if err != nil {
+			c.log.Debug("image fetch request failed", "err", err)
+			return nil, "", fmt.Errorf("fetch image: request failed")
+		}
+		if authed && resp.StatusCode == http.StatusUnauthorized && attempt == 0 {
+			// Drain a little of the body so the connection can be reused, then
+			// retry with a fresh token; the drain/close errors are irrelevant.
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 512))
+			_ = resp.Body.Close()
+			c.log.Debug("image fetch 401, re-syncing token")
+			badToken = token
+			continue
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			// Read only a small slice of an error body for diagnostics.
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+			c.log.Debug("image fetch failed", "status", resp.StatusCode, "body", string(body))
+			return nil, "", &APIError{StatusCode: resp.StatusCode, Method: http.MethodGet, Path: "image", Body: string(body)}
+		}
+		data, err := io.ReadAll(io.LimitReader(resp.Body, maxImageReadBytes+1))
+		if err != nil {
+			return nil, "", fmt.Errorf("read image bytes: %w", err)
+		}
+		if len(data) > maxImageReadBytes {
+			return nil, "", fmt.Errorf("image exceeds %d MiB limit", maxImageReadBytes>>20)
+		}
 
-	mime := resp.Header.Get("Content-Type")
-	if mime == "" || !strings.HasPrefix(mime, "image/") {
-		mime = http.DetectContentType(data)
+		mime := resp.Header.Get("Content-Type")
+		if mime == "" || !strings.HasPrefix(mime, "image/") {
+			mime = http.DetectContentType(data)
+		}
+		return data, mime, nil
 	}
-	return data, mime, nil
 }
 
 // downscale shrinks JPEG/PNG images whose longest edge exceeds maxDim, returning
@@ -161,7 +176,10 @@ func downscale(data []byte, mime string, maxDim int) ([]byte, string) {
 	if err != nil {
 		return data, mime
 	}
-	if cfg.Width <= 0 || cfg.Height <= 0 || cfg.Width*cfg.Height > maxImagePixels {
+	// Multiply in int64: on 32-bit platforms (the released armv7 binary) a
+	// crafted header like 46341x46341 overflows native int to a negative
+	// product and would slip past the cap.
+	if cfg.Width <= 0 || cfg.Height <= 0 || int64(cfg.Width)*int64(cfg.Height) > maxImagePixels {
 		return data, mime
 	}
 
@@ -172,7 +190,21 @@ func downscale(data []byte, mime string, maxDim int) ([]byte, string) {
 	b := src.Bounds()
 	w, h := b.Dx(), b.Dy()
 	if w <= maxDim && h <= maxDim {
+		// Small enough already; the untouched bytes keep their EXIF, so a
+		// rotated JPEG still displays upright.
 		return data, mime
+	}
+
+	// Re-encoding strips EXIF, including the Orientation tag — bake the stored
+	// rotation/flip into the pixels first so a phone JPEG (commonly stored
+	// rotated, Orientation 6/8) is downscaled upright instead of returned at
+	// full size or sideways.
+	if mime == "image/jpeg" {
+		if o := jpegOrientation(data); o != 1 {
+			src = applyOrientation(src, o)
+			b = src.Bounds()
+			w, h = b.Dx(), b.Dy()
+		}
 	}
 
 	nw, nh := scaledDims(w, h, maxDim)
@@ -190,6 +222,132 @@ func downscale(data []byte, mime string, maxDim int) ([]byte, string) {
 		return data, mime
 	}
 	return buf.Bytes(), "image/jpeg"
+}
+
+// applyOrientation returns img transformed so that a frame stored with EXIF
+// Orientation o (2–8) displays upright without the tag. Orientation 1 (and any
+// out-of-range value) returns img unchanged.
+func applyOrientation(img image.Image, o int) image.Image {
+	if o < 2 || o > 8 {
+		return img
+	}
+	b := img.Bounds()
+	w, h := b.Dx(), b.Dy()
+	dw, dh := w, h
+	if o >= 5 { // 5–8 are 90° transforms: the axes swap
+		dw, dh = h, w
+	}
+	dst := image.NewRGBA(image.Rect(0, 0, dw, dh))
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			var dx, dy int
+			switch o {
+			case 2: // mirrored horizontally
+				dx, dy = w-1-x, y
+			case 3: // rotated 180°
+				dx, dy = w-1-x, h-1-y
+			case 4: // mirrored vertically
+				dx, dy = x, h-1-y
+			case 5: // transposed
+				dx, dy = y, x
+			case 6: // rotated 90° CW
+				dx, dy = h-1-y, x
+			case 7: // transversed
+				dx, dy = h-1-y, w-1-x
+			case 8: // rotated 90° CCW
+				dx, dy = y, w-1-x
+			}
+			dst.Set(dx, dy, img.At(b.Min.X+x, b.Min.Y+y))
+		}
+	}
+	return dst
+}
+
+// jpegOrientation returns the EXIF Orientation tag (1–8) of a JPEG, or 1 when
+// the tag is absent or anything fails to parse (1 = stored upright). It walks
+// JPEG segments to the APP1/Exif block and reads tag 0x0112 from IFD0 — just
+// enough EXIF to bake the rotation into the pixels before re-encoding strips
+// the tag.
+func jpegOrientation(data []byte) int {
+	if len(data) < 4 || data[0] != 0xFF || data[1] != 0xD8 {
+		return 1
+	}
+	i := 2
+	for i+4 <= len(data) {
+		if data[i] != 0xFF {
+			return 1
+		}
+		marker := data[i+1]
+		switch {
+		case marker == 0xD8 || marker == 0x01 || (marker >= 0xD0 && marker <= 0xD7):
+			i += 2 // standalone marker, no length
+			continue
+		case marker == 0xDA:
+			return 1 // start of scan: no APP1 ahead of the image data
+		}
+		size := int(data[i+2])<<8 | int(data[i+3])
+		if size < 2 || i+2+size > len(data) {
+			return 1
+		}
+		if marker == 0xE1 {
+			if o := exifOrientation(data[i+4 : i+2+size]); o != 0 {
+				return o
+			}
+		}
+		i += 2 + size
+	}
+	return 1
+}
+
+// exifOrientation extracts Orientation from an APP1/Exif payload, returning 0
+// when absent or malformed.
+func exifOrientation(seg []byte) int {
+	if len(seg) < 14 || string(seg[:6]) != "Exif\x00\x00" {
+		return 0
+	}
+	tiff := seg[6:]
+	var be bool
+	switch {
+	case tiff[0] == 'I' && tiff[1] == 'I':
+		be = false
+	case tiff[0] == 'M' && tiff[1] == 'M':
+		be = true
+	default:
+		return 0
+	}
+	u16 := func(b []byte) int {
+		if be {
+			return int(b[0])<<8 | int(b[1])
+		}
+		return int(b[1])<<8 | int(b[0])
+	}
+	u32 := func(b []byte) int {
+		if be {
+			return int(b[0])<<24 | int(b[1])<<16 | int(b[2])<<8 | int(b[3])
+		}
+		return int(b[3])<<24 | int(b[2])<<16 | int(b[1])<<8 | int(b[0])
+	}
+	if u16(tiff[2:4]) != 42 {
+		return 0
+	}
+	off := u32(tiff[4:8])
+	if off < 0 || off+2 > len(tiff) {
+		return 0
+	}
+	n := u16(tiff[off : off+2])
+	for i := 0; i < n; i++ {
+		e := off + 2 + i*12
+		if e+12 > len(tiff) {
+			return 0
+		}
+		if u16(tiff[e:e+2]) == 0x0112 { // Orientation
+			if v := u16(tiff[e+8 : e+10]); v >= 1 && v <= 8 {
+				return v
+			}
+			return 0
+		}
+	}
+	return 0
 }
 
 func scaledDims(w, h, maxDim int) (int, int) {

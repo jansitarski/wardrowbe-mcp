@@ -10,5 +10,5 @@ maintainers:
 # version is the chart version; appVersion tracks the application/image version.
 # The release workflow overrides both with the pushed git tag (`--version` /
 # `--app-version`), so these are only the local/dev defaults.
-version: 0.3.0
-appVersion: "0.3.0"
+version: 1.0.0
+appVersion: "1.0.0"

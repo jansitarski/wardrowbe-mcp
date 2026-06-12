@@ -3,8 +3,12 @@
 package mcpserver
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"log/slog"
+	"net/http"
+	"sync"
+	"time"
 
 	"github.com/jansitarski/wardrowbe-mcp/internal/config"
 	"github.com/jansitarski/wardrowbe-mcp/internal/wardrowbe"
@@ -20,14 +24,38 @@ const serverName = "wardrowbe-mcp"
 // (see the Dockerfile and Makefile); unbuilt/dev builds report "dev".
 var serverVersion = "dev"
 
+// Version returns the build version reported to MCP clients (see serverVersion),
+// so the command layer can answer `--version` with the same value.
+func Version() string { return serverVersion }
+
 // Server bundles the runtime dependencies shared by every tool handler.
 type Server struct {
 	cfg    config.Config
 	client *wardrowbe.Client
 	log    *slog.Logger
 	mcp    *server.MCPServer
+	// apiKeyHash is the SHA-256 of cfg.APIKey, precomputed once so the
+	// per-request bearer comparison doesn't re-hash the configured key.
+	apiKeyHash [32]byte
 	// sem bounds concurrent /mcp requests (buffered to cfg.MaxConcurrent).
 	sem chan struct{}
+	// imageTransport builds the HTTP transport for external image fetches.
+	// Production uses the SSRF-guarded transport; tests inject a plain one to
+	// reach a loopback test server. Injecting it here (rather than a package-level
+	// var) keeps the seam per-instance and free of data races under -race.
+	// It is invoked once: the resulting transport is shared across fetches so
+	// idle keep-alive connections are pooled and reaped instead of leaking
+	// per call (see imageHTTPTransport).
+	imageTransport     func() *http.Transport
+	imageTransportOnce sync.Once
+	imageTransportInst *http.Transport
+
+	// readyMu guards a short-lived cache of the last backend readiness result so
+	// the unauthenticated /readyz endpoint can't be used to drive unbounded
+	// backend pings. It is held across the bounded ping itself (see readiness).
+	readyMu      sync.Mutex
+	readyChecked time.Time
+	readyErr     error
 }
 
 // New builds the MCP server and registers all tools.
@@ -40,11 +68,13 @@ func New(cfg config.Config, client *wardrowbe.Client, log *slog.Logger) *Server 
 	)
 
 	s := &Server{
-		cfg:    cfg,
-		client: client,
-		log:    log,
-		mcp:    mcpSrv,
-		sem:    make(chan struct{}, cfg.MaxConcurrent),
+		cfg:            cfg,
+		client:         client,
+		log:            log,
+		mcp:            mcpSrv,
+		apiKeyHash:     sha256.Sum256([]byte(cfg.APIKey)),
+		sem:            make(chan struct{}, cfg.MaxConcurrent),
+		imageTransport: ssrfTransport,
 	}
 	s.registerTools()
 	return s
@@ -53,6 +83,15 @@ func New(cfg config.Config, client *wardrowbe.Client, log *slog.Logger) *Server 
 // MCP exposes the underlying mcp-go server (used to build transports).
 func (s *Server) MCP() *server.MCPServer { return s.mcp }
 
+// imageHTTPTransport returns the shared transport for external image fetches,
+// building it on first use from the injected factory.
+func (s *Server) imageHTTPTransport() *http.Transport {
+	s.imageTransportOnce.Do(func() {
+		s.imageTransportInst = s.imageTransport()
+	})
+	return s.imageTransportInst
+}
+
 // registerTools attaches every tool group. Grouped by domain across files.
 func (s *Server) registerTools() {
 	s.registerMiscTools()      // health, auth, session, analytics, notifications
@@ -60,7 +99,7 @@ func (s *Server) registerTools() {
 	s.registerOutfitTools()    // suggest, get, recent, accept/reject/skip, feedback
 	s.registerImageTools()     // get_item_image, get_outfit_images
 	s.registerWritebackTools() // update_item, set_item_tags, set_item_description
-	s.registerCreateTools()    // create_item_from_url
+	s.registerCreateTools()    // create_item_from_url, create_item_from_base64
 }
 
 // add registers a tool with its handler.

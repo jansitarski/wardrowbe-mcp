@@ -11,7 +11,7 @@ chart version always matches an image that exists.
 
 ```bash
 helm install wardrowbe-mcp \
-  oci://ghcr.io/jansitarski/charts/wardrowbe-mcp --version 0.3.0 \
+  oci://ghcr.io/jansitarski/charts/wardrowbe-mcp --version 1.0.0 \
   --namespace wardrowbe --create-namespace \
   --set config.wardrowbeUrl=http://backend.wardrowbe.svc.cluster.local:8000 \
   --set apiKey.value="$MCP_API_KEY"
@@ -21,13 +21,14 @@ Or with a values file:
 
 ```bash
 helm install wardrowbe-mcp \
-  oci://ghcr.io/jansitarski/charts/wardrowbe-mcp --version 0.3.0 \
+  oci://ghcr.io/jansitarski/charts/wardrowbe-mcp --version 1.0.0 \
   -n wardrowbe --create-namespace -f my-values.yaml
 ```
 
 The chart's `appVersion` pins the image tag by default, so the chart version and
-the running binary stay in lock-step. The GHCR package is private by default —
-set `imagePullSecrets` to a Secret that can pull it.
+the running binary stay in lock-step. The published image and chart are public on
+GHCR, so no pull secret is needed; set `imagePullSecrets` only if you fork and host
+a private package.
 
 ## Minimal `values.yaml`
 
@@ -35,15 +36,11 @@ set `imagePullSecrets` to a Secret that can pull it.
 config:
   wardrowbeUrl: http://backend.wardrowbe.svc.cluster.local:8000
   auth: dev
-  externalId: your-user-id
-  externalEmail: user@example.com
+  externalId: you-example-com
+  externalEmail: you@example.com
 apiKey:
   # Prefer an existing (e.g. SOPS-managed) Secret over an inline value:
   existingSecret: wardrowbe-mcp-secrets
-imagePullSecrets:
-  - name: ghcr-pull
-nodeSelector:
-  kubernetes.io/arch: amd64
 ```
 
 ## The API key
@@ -52,21 +49,53 @@ The http transport requires an incoming bearer key (`MCP_API_KEY`). Provide it
 one of two ways:
 
 - **`apiKey.value`** — the chart creates a Secret holding it. Convenient for
-  `--set`, but keep it out of committed values files.
+  `--set`, but keep it out of committed values files. A pod-template checksum
+  annotation rolls the Deployment automatically when you rotate this value.
 - **`apiKey.existingSecret`** — reference a Secret you manage yourself (SOPS,
   Sealed Secrets, External Secrets, …). The key defaults to `mcp-api-key`
-  (`apiKey.key`). This is the recommended path for GitOps.
+  (`apiKey.key`). This is the recommended path for GitOps. Note: after rotating
+  the key in your external Secret, run `kubectl rollout restart` (or use a
+  controller like Reloader) — pods resolve the env var only at start.
+
+## OIDC auth
+
+Set `config.auth=oidc` to send a real per-user identity (instead of the fixed
+dev identity) to the backend. The issuer URL and client ID are non-secret and are
+passed as flags (`oidc.issuerUrl`, `oidc.clientId`). The **client secret and
+refresh token are secret**, so the chart wires them from a Secret as environment
+variables — never as pod args, which are visible via `kubectl get pod -o yaml`,
+in etcd, and in audit logs:
+
+```yaml
+config:
+  auth: oidc
+oidc:
+  issuerUrl: https://issuer.example.com
+  clientId: my-client-id
+  existingSecret: wardrowbe-mcp-oidc   # holds the secret material
+  # clientSecretKey / refreshTokenKey default to oidc-client-secret / oidc-refresh-token
+```
+
+Create the Secret out-of-band (SOPS / Sealed Secrets / External Secrets):
+
+```bash
+kubectl -n wardrowbe create secret generic wardrowbe-mcp-oidc \
+  --from-literal=oidc-client-secret="$OIDC_CLIENT_SECRET" \
+  --from-literal=oidc-refresh-token="$OIDC_REFRESH_TOKEN"
+```
 
 ## Values
 
 | Key | Default | Description |
 |---|---|---|
-| `replicaCount` | `1` | Number of pods. |
+| `replicaCount` | `1` | Number of pods. The server is stateless for MCP traffic (>1 works without sticky sessions), but with `config.auth=oidc` and an IdP that rotates refresh tokens, keep this at `1`: replicas sharing one refresh token trip the IdP's reuse detection. |
 | `image.repository` | `ghcr.io/jansitarski/wardrowbe-mcp` | Image repository. |
 | `image.tag` | `""` | Image tag; falls back to `.Chart.AppVersion`. |
 | `image.pullPolicy` | `IfNotPresent` | Image pull policy. |
 | `imagePullSecrets` | `[]` | Pull secrets for a private image, e.g. `[{name: ghcr-pull}]`. |
-| `config.transport` | `http` | `http` (Streamable HTTP) or `stdio`. |
+| `nameOverride` | `""` | Override the chart name used in resource names. |
+| `fullnameOverride` | `""` | Override the full resource name. |
+| `config.transport` | `http` | Must be `http`; the chart refuses `stdio` (nothing attaches to a pod's stdin). |
 | `config.host` | `0.0.0.0` | Bind host. |
 | `config.port` | `8080` | Bind port (also the container/probe port). |
 | `config.wardrowbeUrl` | `""` | **Required.** Backend base URL (no `/api/v1`). |
@@ -77,6 +106,11 @@ one of two ways:
 | `config.maxConcurrent` | `""` | In-flight `/mcp` cap (empty → binary default 16). |
 | `config.maxBodyMb` | `""` | Inbound `/mcp` body cap MB (empty → default 40). |
 | `config.extraArgs` | `[]` | Additional raw flags. |
+| `oidc.issuerUrl` | `""` | OIDC issuer URL (flag; `config.auth=oidc`). |
+| `oidc.clientId` | `""` | OIDC client ID (flag; `config.auth=oidc`). |
+| `oidc.existingSecret` | `""` | Secret holding the OIDC client secret / refresh token (env, not args). |
+| `oidc.clientSecretKey` | `oidc-client-secret` | Secret key for the client secret. |
+| `oidc.refreshTokenKey` | `oidc-refresh-token` | Secret key for the refresh token. |
 | `apiKey.value` | `""` | Inline bearer key; chart creates a Secret. |
 | `apiKey.existingSecret` | `""` | Reference an existing Secret instead. |
 | `apiKey.key` | `mcp-api-key` | Secret key holding the bearer. |
@@ -88,6 +122,8 @@ one of two ways:
 | `securityContext` | no-priv-esc, read-only root, drop ALL caps | Container security context. |
 | `serviceAccount.create` | `false` | Create a ServiceAccount. |
 | `serviceAccount.name` | `""` | ServiceAccount name (or existing). |
+| `automountServiceAccountToken` | `false` | The server never talks to the k8s API; no token is mounted. |
+| `terminationGracePeriodSeconds` | `30` | Exceeds the binary's 15s drain window. |
 | `nodeSelector` / `tolerations` / `affinity` | `{}` / `[]` / `{}` | Scheduling. |
 | `podAnnotations` | `{}` | Pod annotations. |
 | `readinessProbe` | `GET /readyz` | Readiness probe (pings the backend). |
@@ -107,7 +143,7 @@ spec:
   interval: 1h
   url: oci://ghcr.io/jansitarski/charts/wardrowbe-mcp
   ref:
-    tag: "0.3.0"
+    tag: "1.0.0"
 ---
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease

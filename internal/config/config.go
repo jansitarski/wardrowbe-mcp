@@ -12,6 +12,11 @@ import (
 	"strings"
 )
 
+// ErrUsage wraps flag-parsing errors that the flag package has already reported
+// to stderr (unknown flag, bad value, ...). Callers should exit non-zero without
+// printing the error again.
+var ErrUsage = errors.New("usage error")
+
 // Transport identifies how the MCP server talks to clients.
 type Transport string
 
@@ -42,7 +47,6 @@ const (
 	defaultTransport     = string(TransportHTTP)
 	defaultHost          = "0.0.0.0"
 	defaultPort          = 8080
-	defaultWardrowbeURL  = "http://127.0.0.1:8000"
 	defaultAuthMode      = string(AuthDev)
 	defaultExternalID    = "wardrowbe-mcp"
 	defaultLogLevel      = "INFO"
@@ -66,10 +70,11 @@ type Config struct {
 	ExternalID    string
 	ExternalEmail string
 
-	OIDCIssuerURL    string
-	OIDCClientID     string
-	OIDCClientSecret string
-	OIDCRefreshToken string
+	OIDCIssuerURL     string
+	OIDCClientID      string
+	OIDCClientSecret  string
+	OIDCRefreshToken  string
+	OIDCTokenEndpoint string // optional override; skips discovery when set
 
 	LogLevel string
 
@@ -81,6 +86,11 @@ type Config struct {
 	// requests get 503. MaxBodyBytes caps the inbound /mcp request body.
 	MaxConcurrent int
 	MaxBodyBytes  int64
+
+	// ShowVersion is set by --version; when true the caller should print the
+	// version and exit instead of starting the server. The rest of the Config is
+	// not validated in that case.
+	ShowVersion bool
 }
 
 // Load resolves configuration from the given args (typically os.Args[1:]) and
@@ -88,12 +98,37 @@ type Config struct {
 func Load(args []string) (Config, error) {
 	fs := flag.NewFlagSet("wardrowbe-mcp", flag.ContinueOnError)
 
+	// Collect malformed integer env vars instead of silently falling back to the
+	// default, so a typo (e.g. MCP_MAX_CONCURRENT=abc) fails loudly at startup.
+	// Each error is keyed by its flag name: an explicitly-passed flag overrides
+	// the env var (documented precedence), so its env error must not be fatal.
+	type envErr struct{ flagName, msg string }
+	var envErrs []envErr
+	envOrInt := func(flagName, key string, fallback int) int {
+		v, ok := os.LookupEnv(key)
+		if !ok || v == "" {
+			return fallback
+		}
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			envErrs = append(envErrs, envErr{flagName, fmt.Sprintf("%s=%q (not an integer)", key, v)})
+			return fallback
+		}
+		return n
+	}
+
 	transport := fs.String("transport", envOr("MCP_TRANSPORT", defaultTransport), "transport: http or stdio")
 	host := fs.String("host", envOr("MCP_BIND_HOST", defaultHost), "bind host (http)")
-	port := fs.Int("port", envOrInt("MCP_BIND_PORT", defaultPort), "bind port (http)")
+	port := fs.Int("port", envOrInt("port", "MCP_BIND_PORT", defaultPort), "bind port (http)")
 
-	wardrowbeURL := fs.String("wardrowbe-url", envOr("WARDROWBE_URL", defaultWardrowbeURL), "backend base URL (no /api/v1)")
-	apiKey := fs.String("api-key", envOr("MCP_API_KEY", ""), "incoming Bearer key (required for http)")
+	wardrowbeURL := fs.String("wardrowbe-url", envOr("WARDROWBE_URL", ""), "backend base URL (no /api/v1); required")
+
+	// Secret-bearing flags must NOT seed their defaults from the environment:
+	// the flag package prints non-empty defaults in its usage output, which is
+	// emitted on --help and on any mistyped flag — dumping secrets to stderr
+	// (and into container logs on a crash loop). They get empty defaults here
+	// and fall back to env after parsing, preserving flags-over-env precedence.
+	apiKey := fs.String("api-key", "", "incoming Bearer key (required for http; prefer env MCP_API_KEY)")
 
 	authMode := fs.String("auth", envOr("MCP_AUTH_MODE", defaultAuthMode), "auth mode: dev or oidc")
 	externalID := fs.String("external-id", envOr("MCP_EXTERNAL_ID", defaultExternalID), "dev identity external_id")
@@ -101,20 +136,60 @@ func Load(args []string) (Config, error) {
 
 	oidcIssuer := fs.String("oidc-issuer-url", envOr("MCP_OIDC_ISSUER_URL", ""), "OIDC issuer URL")
 	oidcClientID := fs.String("oidc-client-id", envOr("MCP_OIDC_CLIENT_ID", ""), "OIDC client id")
-	oidcClientSecret := fs.String("oidc-client-secret", envOr("MCP_OIDC_CLIENT_SECRET", ""), "OIDC client secret")
-	oidcRefreshToken := fs.String("oidc-refresh-token", envOr("MCP_OIDC_REFRESH_TOKEN", ""), "OIDC refresh token")
+	oidcTokenEndpoint := fs.String("oidc-token-endpoint", envOr("MCP_OIDC_TOKEN_ENDPOINT", ""), "OIDC token endpoint override (skips discovery)")
+	oidcClientSecret := fs.String("oidc-client-secret", "", "OIDC client secret (prefer env MCP_OIDC_CLIENT_SECRET)")
+	oidcRefreshToken := fs.String("oidc-refresh-token", "", "OIDC refresh token (prefer env MCP_OIDC_REFRESH_TOKEN)")
 
 	logLevel := fs.String("log-level", envOr("MCP_LOG_LEVEL", defaultLogLevel), "log level")
 
-	imageMaxDim := fs.Int("image-max-dim", envOrInt("MCP_IMAGE_MAX_DIM", defaultImageMaxDim), "max returned image dimension")
+	imageMaxDim := fs.Int("image-max-dim", envOrInt("image-max-dim", "MCP_IMAGE_MAX_DIM", defaultImageMaxDim), "max returned image dimension")
 	imageVariant := fs.String("image-default-variant", envOr("MCP_IMAGE_VARIANT", defaultImageVariant), "default image variant: thumb/medium/full")
 	portalResourceURL := fs.String("portal-resource-url", envOr("MCP_PORTAL_RESOURCE_URL", ""), "OAuth protected-resource metadata URL for WWW-Authenticate")
 
-	maxConcurrent := fs.Int("max-concurrent", envOrInt("MCP_MAX_CONCURRENT", defaultMaxConcurrent), "max in-flight /mcp requests (http)")
-	maxBodyMB := fs.Int("max-body-mb", envOrInt("MCP_MAX_BODY_MB", defaultMaxBodyMB), "max inbound /mcp request body in MiB")
+	maxConcurrent := fs.Int("max-concurrent", envOrInt("max-concurrent", "MCP_MAX_CONCURRENT", defaultMaxConcurrent), "max in-flight /mcp requests (http)")
+	maxBodyMB := fs.Int("max-body-mb", envOrInt("max-body-mb", "MCP_MAX_BODY_MB", defaultMaxBodyMB), "max inbound /mcp request body in MiB")
+
+	showVersion := fs.Bool("version", false, "print version and exit")
 
 	if err := fs.Parse(args); err != nil {
-		return Config{}, err
+		if errors.Is(err, flag.ErrHelp) {
+			return Config{}, err
+		}
+		// The flag package already printed the error and usage to stderr.
+		return Config{}, fmt.Errorf("%w: %v", ErrUsage, err)
+	}
+	if *showVersion {
+		// Skip validation: --version must work without --api-key etc.
+		return Config{ShowVersion: true}, nil
+	}
+	// A malformed integer env var is fatal only when its value would actually be
+	// used: a flag passed on the command line wins over the env var, so its env
+	// error is dropped (the stale env value never influences the config).
+	explicitly := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { explicitly[f.Name] = true })
+	var fatalEnvErrs []string
+	for _, e := range envErrs {
+		if !explicitly[e.flagName] {
+			fatalEnvErrs = append(fatalEnvErrs, e.msg)
+		}
+	}
+	if len(fatalEnvErrs) > 0 {
+		return Config{}, fmt.Errorf("invalid integer environment variable(s): %s", strings.Join(fatalEnvErrs, ", "))
+	}
+
+	// Apply env fallbacks for the secret flags that intentionally have no
+	// env-seeded default (see above). An explicitly-set flag still wins.
+	for _, sec := range []struct {
+		dst    *string
+		envKey string
+	}{
+		{apiKey, "MCP_API_KEY"},
+		{oidcClientSecret, "MCP_OIDC_CLIENT_SECRET"},
+		{oidcRefreshToken, "MCP_OIDC_REFRESH_TOKEN"},
+	} {
+		if *sec.dst == "" {
+			*sec.dst = envOr(sec.envKey, "")
+		}
 	}
 
 	cfg := Config{
@@ -128,6 +203,7 @@ func Load(args []string) (Config, error) {
 		ExternalEmail:     *externalEmail,
 		OIDCIssuerURL:     *oidcIssuer,
 		OIDCClientID:      *oidcClientID,
+		OIDCTokenEndpoint: *oidcTokenEndpoint,
 		OIDCClientSecret:  *oidcClientSecret,
 		OIDCRefreshToken:  *oidcRefreshToken,
 		LogLevel:          strings.ToUpper(*logLevel),
@@ -157,6 +233,9 @@ func (c Config) validate() error {
 
 	switch c.AuthMode {
 	case AuthDev:
+		if strings.TrimSpace(c.ExternalID) == "" {
+			return errors.New("dev mode requires a non-empty --external-id (MCP_EXTERNAL_ID)")
+		}
 	case AuthOIDC:
 		if c.OIDCIssuerURL == "" || c.OIDCClientID == "" || c.OIDCRefreshToken == "" {
 			return errors.New("oidc mode requires --oidc-issuer-url, --oidc-client-id and --oidc-refresh-token")
@@ -166,6 +245,12 @@ func (c Config) validate() error {
 		if u, err := url.Parse(c.OIDCIssuerURL); err != nil || u.Scheme != "https" || u.Host == "" {
 			return fmt.Errorf("invalid --oidc-issuer-url %q (must be an https URL)", c.OIDCIssuerURL)
 		}
+		// Same for an explicit token-endpoint override.
+		if c.OIDCTokenEndpoint != "" {
+			if u, err := url.Parse(c.OIDCTokenEndpoint); err != nil || u.Scheme != "https" || u.Host == "" {
+				return fmt.Errorf("invalid --oidc-token-endpoint %q (must be an https URL)", c.OIDCTokenEndpoint)
+			}
+		}
 	default:
 		return fmt.Errorf("invalid --auth %q (want dev or oidc)", c.AuthMode)
 	}
@@ -174,6 +259,14 @@ func (c Config) validate() error {
 	case VariantThumb, VariantMedium, VariantFull:
 	default:
 		return fmt.Errorf("invalid --image-default-variant %q (want thumb/medium/full)", c.ImageVariant)
+	}
+
+	// LogLevel is uppercased in Load; reject anything the logger would silently
+	// map to INFO so a typo (e.g. "DEBG") fails fast instead of hiding output.
+	switch c.LogLevel {
+	case "DEBUG", "INFO", "WARN", "WARNING", "ERROR":
+	default:
+		return fmt.Errorf("invalid --log-level %q (want debug/info/warn/error)", c.LogLevel)
 	}
 
 	if c.Transport == TransportHTTP {
@@ -213,15 +306,6 @@ func (c Config) Addr() string {
 func envOr(key, fallback string) string {
 	if v, ok := os.LookupEnv(key); ok && v != "" {
 		return v
-	}
-	return fallback
-}
-
-func envOrInt(key string, fallback int) int {
-	if v, ok := os.LookupEnv(key); ok && v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			return n
-		}
 	}
 	return fallback
 }
