@@ -44,12 +44,11 @@ Apply the following. Each item prevents a specific failure you would otherwise h
    surfaces as `403` at "Save and connect".
 
 6. **Tool naming through the portal** — an Access MCP portal namespaces every tool as
-   `<portal-server-name>_<tool>`. Since v1.0.0 the server's tools already carry a
-   `wardrowbe_` prefix, so a portal server named `wardrowbe` exposes them
-   double-prefixed (`wardrowbe_wardrowbe_health`). When upgrading from a pre-1.0
-   build, pick a short portal server name (e.g. `wb` → `wb_wardrowbe_health`) — and
-   either way, update any saved permission allowlists, which key on the full tool
-   name. Verify the resulting names in the portal's tool list after deploying.
+   `<portal-server-name>_<tool>`, and the server's tools already carry a `wardrowbe_`
+   prefix. Pick a short portal server name (e.g. `wb` → `wb_wardrowbe_health`) —
+   naming it `wardrowbe` gives double-prefixed tools (`wardrowbe_wardrowbe_health`).
+   Permission allowlists key on the full portal-side name, so check the portal's tool
+   list when setting them up.
 
 ## Client options
 
