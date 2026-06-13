@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -40,6 +41,49 @@ func (s *Server) registerImageTools() {
 		mcp.WithString("variant", mcp.Description("Image size: thumb, medium, or full."),
 			mcp.Enum("thumb", "medium", "full")),
 	), s.handleOutfitImages)
+
+	s.add(mcp.NewTool("wardrowbe_download_image",
+		mcp.WithDescription("Download a Wardrowbe-hosted image by its URL or path and return it inline so it "+
+			"renders in the conversation. Pass any image reference you already have from a payload — an item's "+
+			"image_url/medium_url/thumbnail_url, an outfit image, or an additional_images entry (either a relative "+
+			"/api/v1/images/... path or a full URL on the Wardrowbe host). The server fetches it over its "+
+			"authenticated backend connection, so this works even when the backend sits behind an access tunnel "+
+			"and fetching the URL directly would be bounced to a login page. Only Wardrowbe-hosted image paths are "+
+			"accepted. If you have an item id rather than a URL, use wardrowbe_get_item_image instead. Each image "+
+			"costs vision tokens."),
+		mcp.WithReadOnlyHintAnnotation(true),
+		mcp.WithString("image", mcp.Required(), mcp.Description("A Wardrowbe image reference: a relative "+
+			"/api/v1/images/... path (the ?expires&sig query, if present, is preserved) or a full URL on the "+
+			"Wardrowbe host.")),
+	), s.handleDownloadImage)
+}
+
+func (s *Server) handleDownloadImage(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	ref, errRes := requireID(req, "image")
+	if errRes != nil {
+		return errRes, nil
+	}
+
+	img, err := s.client.ImageByRef(ctx, ref, s.cfg.ImageMaxDim)
+	if err != nil {
+		// A bad reference is caller input, like a failed arg check: surface the
+		// (internals-free) reason verbatim. Backend/network errors stay sanitized.
+		var refErr *wardrowbe.ImageRefError
+		if errors.As(err, &refErr) {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		return toolErr("download image failed", err), nil
+	}
+
+	manifest, _ := json.Marshal(map[string]any{
+		"source": "wardrowbe", "mime_type": img.MIME, "bytes": len(img.Data),
+	})
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{
+			mcp.NewTextContent(string(manifest)),
+			mcp.NewImageContent(base64.StdEncoding.EncodeToString(img.Data), img.MIME),
+		},
+	}, nil
 }
 
 func (s *Server) handleItemImage(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {

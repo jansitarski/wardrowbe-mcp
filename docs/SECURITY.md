@@ -35,6 +35,17 @@ security properties:
   legitimately live on private addresses (MinIO, NAS). Only *caller*-supplied
   URLs (`wardrowbe_create_item_from_url`) get the SSRF treatment. If your
   backend is not trustworthy, this server is the wrong deployment model.
+- **Reference-based image download is host- and path-scoped.**
+  `wardrowbe_download_image` fetches an image by a reference the caller passes
+  (a relative `/api/v1/images/...` path or a full URL), over the *authenticated*
+  backend connection — which is what lets it retrieve images when the backend
+  sits behind a Cloudflare Access (or similar) tunnel that bounces an
+  unauthenticated direct URL fetch to a login page. Because the fetch carries the
+  bearer token, the reference is validated before dialing: the host (for an
+  absolute URL) must equal the configured backend host, and the resolved path
+  must live under `/api/v1/images/`. This keeps the tool an image fetcher rather
+  than an authenticated proxy to arbitrary hosts or other backend endpoints; an
+  out-of-scope reference is rejected with a clear, internals-free message.
 - **Secrets.** All credentials (API key, OIDC client secret / refresh token)
   come from flags or environment variables. None are committed to the repo.
 

@@ -6,6 +6,20 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- `wardrowbe_download_image` tool — fetches a Wardrowbe-hosted image by a
+  reference already in context (an item's `image_url`/`medium_url`/
+  `thumbnail_url`, an outfit image, or an `additional_images` entry) and returns
+  it inline so it renders in the conversation. Unlike `wardrowbe_get_item_image`
+  (which takes an `item_id` and does a `GET /items/{id}` first), it accepts a
+  relative `/api/v1/images/...` path or a full backend URL and fetches it over
+  the *authenticated* backend connection — so it works even when the backend
+  sits behind a Cloudflare Access tunnel where a direct, unauthenticated URL
+  fetch would be bounced to a login page. The reference is validated before
+  dialing (host must match the backend; path must be under `/api/v1/images/`)
+  so the bearer-bearing fetch can't be turned into a proxy to other hosts or
+  endpoints.
+
 ## [1.0.0] - 2026-06-12
 
 First public release. Changes below are relative to v0.3.0 and include a full
