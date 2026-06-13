@@ -77,6 +77,88 @@ func (c *Client) ItemImageFromPayload(ctx context.Context, itemID string, fields
 	return ImageData{ItemID: itemID, Data: data, MIME: mime}, nil
 }
 
+// ImageByRef fetches a single Wardrowbe-hosted image identified by a reference
+// taken from a payload already in context — an item's image_url/medium_url/
+// thumbnail_url, an outfit image, or an additional_images entry. The reference
+// may be a backend-relative path (e.g. "/api/v1/images/u/x.jpg?expires=…&sig=…")
+// or a full URL on the backend host. Unlike the absolute pre-signed URLs in
+// resolveImageURL, the fetch always goes through the authenticated backend
+// connection (bearer token), so it succeeds even when the backend sits behind an
+// access tunnel where a direct, unauthenticated URL fetch would be bounced to a
+// login page. The reference is constrained to the configured backend host and
+// the /api/v1/images/ path so this can never be used as an authenticated proxy
+// to arbitrary hosts or other backend endpoints.
+func (c *Client) ImageByRef(ctx context.Context, ref string, maxDim int) (ImageData, error) {
+	imageURL, err := c.resolveBackendImageURL(ref)
+	if err != nil {
+		return ImageData{}, err
+	}
+	data, mime, err := c.fetchImageBytes(ctx, imageURL, true)
+	if err != nil {
+		return ImageData{}, err
+	}
+	data, mime = downscale(data, mime, maxDim)
+	return ImageData{Data: data, MIME: mime}, nil
+}
+
+// imagePathPrefix is the only path an image reference may resolve to. Scoping to
+// it keeps ImageByRef an image fetcher rather than a general authenticated proxy.
+const imagePathPrefix = apiBase + "/images/"
+
+// ImageRefError marks an image reference that failed validation (bad scheme,
+// foreign host, out-of-scope path, or malformed). Its message describes the
+// input constraint and carries no backend internals, so the tool layer can
+// surface it to the caller verbatim instead of the generic "request failed".
+type ImageRefError struct{ msg string }
+
+func (e *ImageRefError) Error() string { return e.msg }
+
+func refErr(format string, a ...any) error { return &ImageRefError{msg: fmt.Sprintf(format, a...)} }
+
+// resolveBackendImageURL validates a caller-supplied image reference and returns
+// the absolute backend URL to fetch. It accepts a full URL only when its host
+// matches the configured backend, and a relative reference only when it is an
+// absolute path (not protocol-relative). In both cases the resolved path must
+// live under /api/v1/images/.
+func (c *Client) resolveBackendImageURL(ref string) (string, error) {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return "", refErr("empty image reference")
+	}
+
+	u, err := url.Parse(ref)
+	if err != nil {
+		return "", refErr("invalid image reference")
+	}
+
+	if u.IsAbs() {
+		if u.Scheme != "http" && u.Scheme != "https" {
+			return "", refErr("only http(s) wardrowbe image urls are allowed")
+		}
+		base, err := url.Parse(c.baseURL)
+		if err != nil {
+			return "", fmt.Errorf("backend url is misconfigured")
+		}
+		if !strings.EqualFold(u.Host, base.Host) {
+			return "", refErr("refusing to fetch image from a non-wardrowbe host")
+		}
+		if !strings.HasPrefix(u.Path, imagePathPrefix) {
+			return "", refErr("image reference must point at %s", imagePathPrefix)
+		}
+		return u.String(), nil
+	}
+
+	// A relative reference must be a server-absolute path ("/api/v1/images/…"),
+	// never a protocol-relative "//host/…" that would smuggle in another host.
+	if !strings.HasPrefix(ref, "/") || strings.HasPrefix(ref, "//") {
+		return "", refErr("image reference must be a wardrowbe url or an absolute %s path", imagePathPrefix)
+	}
+	if !strings.HasPrefix(u.Path, imagePathPrefix) {
+		return "", refErr("image reference must point at %s", imagePathPrefix)
+	}
+	return c.baseURL + ref, nil
+}
+
 // resolveImageURL builds the URL for a variant and reports whether a bearer
 // token should be attached. A pre-signed absolute URL is fetched as-is; a
 // relative URL or a bare stored path is served from the backend with auth.

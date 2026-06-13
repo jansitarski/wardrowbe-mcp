@@ -164,3 +164,49 @@ func TestResolveImageURL(t *testing.T) {
 		}
 	})
 }
+
+func TestResolveBackendImageURL(t *testing.T) {
+	c := &Client{baseURL: "https://wardrowbe.example.com"}
+
+	t.Run("accepts", func(t *testing.T) {
+		cases := map[string]string{
+			"relative signed path": "/api/v1/images/u/x.jpg?expires=1&sig=abc",
+			"same-host full url":   "https://wardrowbe.example.com/api/v1/images/u/x.jpg?sig=abc",
+		}
+		wants := map[string]string{
+			"relative signed path": "https://wardrowbe.example.com/api/v1/images/u/x.jpg?expires=1&sig=abc",
+			"same-host full url":   "https://wardrowbe.example.com/api/v1/images/u/x.jpg?sig=abc",
+		}
+		for name, ref := range cases {
+			t.Run(name, func(t *testing.T) {
+				got, err := c.resolveBackendImageURL(ref)
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				if got != wants[name] {
+					t.Errorf("url = %s, want %s", got, wants[name])
+				}
+			})
+		}
+	})
+
+	t.Run("rejects", func(t *testing.T) {
+		cases := map[string]string{
+			"empty":                "",
+			"other host":           "https://evil.example.com/api/v1/images/u/x.jpg",
+			"non-http scheme":      "file:///etc/passwd",
+			"protocol-relative":    "//evil.example.com/api/v1/images/u/x.jpg",
+			"relative non-image":   "/api/v1/items/123",
+			"same-host non-image":  "https://wardrowbe.example.com/api/v1/items/123",
+			"not absolute path":    "api/v1/images/u/x.jpg",
+			"path traversal scope": "/api/v1/../secrets",
+		}
+		for name, ref := range cases {
+			t.Run(name, func(t *testing.T) {
+				if _, err := c.resolveBackendImageURL(ref); err == nil {
+					t.Errorf("expected rejection for %q", ref)
+				}
+			})
+		}
+	})
+}

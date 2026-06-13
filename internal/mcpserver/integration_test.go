@@ -30,7 +30,7 @@ import (
 const tinyPNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M8AAAMBAQDJ/pLvAAAAAElFTkSuQmCC"
 
 // expectedToolCount must track the number of tools registered by registerTools.
-const expectedToolCount = 32
+const expectedToolCount = 33
 
 func mockBackend(t *testing.T) *httptest.Server {
 	t.Helper()
@@ -70,6 +70,11 @@ func mockBackend(t *testing.T) *httptest.Server {
 	mux.HandleFunc("/api/v1/", func(w http.ResponseWriter, r *http.Request) {
 		seg := strings.Split(strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/v1/"), "/"), "/")
 		switch seg[0] {
+		case "images":
+			// The backend serves stored images (with a pre-signed query) under
+			// /api/v1/images/{user_id}/{file}; download_image fetches them here.
+			w.Header().Set("Content-Type", "image/png")
+			_, _ = w.Write(png)
 		case "health":
 			writeJSON(w, 200, map[string]any{"status": "ok"})
 		case "auth":
@@ -278,6 +283,7 @@ func TestToolsHappyPath(t *testing.T) {
 		{name: "wardrowbe_submit_outfit_feedback", args: map[string]any{"outfit_id": "outfit-1", "rating": 5, "wore": true, "notes": "great"}},
 		{name: "wardrowbe_get_item_image", args: map[string]any{"item_id": "item-1", "variant": "medium"}, wantImage: true},
 		{name: "wardrowbe_get_outfit_images", args: map[string]any{"outfit_id": "outfit-1", "variant": "medium"}, wantImage: true},
+		{name: "wardrowbe_download_image", args: map[string]any{"image": "/api/v1/images/u-1/item-1-medium.png?expires=1&sig=abc"}, wantImage: true},
 		{name: "wardrowbe_update_item", args: map[string]any{"item_id": "item-1", "name": "New", "primary_color": "navy", "colors": []any{"navy", "white"}, "wash_interval": 3, "favorite": true}},
 		{name: "wardrowbe_set_item_tags", args: map[string]any{"item_id": "item-1", "colors": []any{"blue"}, "pattern": "solid", "material": "cotton", "style": []any{"smart-casual"}, "season": []any{"summer"}, "formality": "casual", "fit": "slim"}},
 		{name: "wardrowbe_set_item_description", args: map[string]any{"item_id": "item-1", "description": "A nice blue shirt"}},
@@ -357,6 +363,9 @@ func TestToolGuards(t *testing.T) {
 		{"wardrowbe_get_recent_outfits", map[string]any{"status": "weird"}, "invalid status"},
 		{"wardrowbe_archive_item", map[string]any{"item_id": "item-1", "reason": strings.Repeat("x", 51)}, "too long"},
 		{"wardrowbe_get_item_image", map[string]any{"item_id": "item-1", "variant": "huge"}, "invalid variant"},
+		{"wardrowbe_download_image", map[string]any{}, "image is required"},
+		{"wardrowbe_download_image", map[string]any{"image": "https://evil.example.com/api/v1/images/x.png"}, "non-wardrowbe host"},
+		{"wardrowbe_download_image", map[string]any{"image": "/api/v1/items/123"}, "/api/v1/images/"},
 		{"wardrowbe_create_item_from_base64", map[string]any{"image_base64": base64.StdEncoding.EncodeToString([]byte("not-an-image"))}, "not an image"},
 	}
 	for _, tt := range cases {
