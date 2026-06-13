@@ -6,6 +6,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-06-13
+
 ### Added
 - `wardrowbe_download_image` tool — fetches a Wardrowbe-hosted image by a
   reference already in context (an item's `image_url`/`medium_url`/
