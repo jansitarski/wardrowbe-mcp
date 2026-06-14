@@ -58,6 +58,9 @@ func (d DevTokenProvider) SyncPayload(_ context.Context) (SyncPayload, error) {
 //     configure, but the token expires and is not renewed — for issuers that do
 //     not support the refresh_token grant, accepting that the connection must be
 //     reconfigured when the token lapses.
+//
+// When both are set the refresh token wins (the durable path); the static
+// IDToken is then unused.
 type OIDCTokenProvider struct {
 	Issuer       string
 	ClientID     string
@@ -125,6 +128,14 @@ func (o *OIDCTokenProvider) idToken(ctx context.Context) (string, error) {
 	if o.RefreshToken == "" {
 		if o.IDToken == "" {
 			return "", fmt.Errorf("oidc: no refresh token or id_token configured")
+		}
+		// The static token is never renewed. Fail fast with an actionable message
+		// if it has already expired, rather than forwarding a token the backend
+		// will reject — which, with no cached access token, would re-sync against
+		// /auth/sync on every request with no backoff.
+		if exp, ok := jwtExpiry(o.IDToken); ok && time.Now().After(exp) {
+			return "", fmt.Errorf("oidc: configured id_token expired at %s; mint a fresh --oidc-id-token "+
+				"(MCP_OIDC_ID_TOKEN) or switch to --oidc-refresh-token", exp.UTC().Format(time.RFC3339))
 		}
 		return o.IDToken, nil
 	}

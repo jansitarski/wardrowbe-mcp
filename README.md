@@ -118,7 +118,7 @@ The most-used ones:
 | `--api-key` | — | Incoming bearer key; **required for http**. Prefer `MCP_API_KEY` env over the flag (argv is visible in `ps`). |
 | `--auth` | `dev` | `dev` or `oidc`. |
 | `--external-id` / `--external-email` | — | Dev identity sent to `/auth/sync`. |
-| `--oidc-issuer-url` / `--oidc-client-id` | — | OIDC issuer + client (required for `--auth oidc`). |
+| `--oidc-issuer-url` / `--oidc-client-id` | — | OIDC issuer + client (required with `--oidc-refresh-token`; unused with a static `--oidc-id-token`). |
 | `--oidc-refresh-token` | — | Enables the `refresh_token` grant: a fresh `id_token` is minted per sync. |
 | `--oidc-id-token` | — | Static `id_token` used when no refresh token is configured. |
 | `--oidc-token-endpoint` | — | Optional https token-endpoint override (skips OIDC discovery). |

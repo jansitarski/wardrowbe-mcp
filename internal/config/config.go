@@ -241,19 +241,25 @@ func (c Config) validate() error {
 			return errors.New("dev mode requires a non-empty --external-id (MCP_EXTERNAL_ID)")
 		}
 	case AuthOIDC:
-		if c.OIDCIssuerURL == "" || c.OIDCClientID == "" {
-			return errors.New("oidc mode requires --oidc-issuer-url and --oidc-client-id")
-		}
 		// The id_token comes from one of two sources. The refresh_token grant is
 		// the durable path; a static id_token is the fallback for issuers that do
 		// not issue refresh tokens (it expires and is not renewed).
 		if c.OIDCRefreshToken == "" && c.OIDCIDToken == "" {
 			return errors.New("oidc mode requires one of --oidc-refresh-token (refresh_token grant) or --oidc-id-token (static token)")
 		}
-		// The client secret and refresh token are sent to endpoints discovered
-		// from this issuer, so it must be https (and well-formed).
-		if u, err := url.Parse(c.OIDCIssuerURL); err != nil || u.Scheme != "https" || u.Host == "" {
-			return fmt.Errorf("invalid --oidc-issuer-url %q (must be an https URL)", c.OIDCIssuerURL)
+		// Only the refresh_token grant contacts the issuer (discovery + token
+		// endpoint), so it needs the issuer and client id. A static id_token is
+		// forwarded as-is and never touches the issuer, so those are optional on
+		// that path.
+		if c.OIDCRefreshToken != "" && (c.OIDCIssuerURL == "" || c.OIDCClientID == "") {
+			return errors.New("oidc mode with --oidc-refresh-token requires --oidc-issuer-url and --oidc-client-id")
+		}
+		// When an issuer is set it is the TLS origin the client secret and refresh
+		// token are POSTed to (via discovery), so it must be https and well-formed.
+		if c.OIDCIssuerURL != "" {
+			if u, err := url.Parse(c.OIDCIssuerURL); err != nil || u.Scheme != "https" || u.Host == "" {
+				return fmt.Errorf("invalid --oidc-issuer-url %q (must be an https URL)", c.OIDCIssuerURL)
+			}
 		}
 		// Same for an explicit token-endpoint override.
 		if c.OIDCTokenEndpoint != "" {

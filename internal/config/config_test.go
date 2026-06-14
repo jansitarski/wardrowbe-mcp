@@ -299,3 +299,32 @@ func TestOIDCStaticIDTokenAccepted(t *testing.T) {
 		t.Errorf("unexpected oidc token config: refresh=%q id=%q", cfg.OIDCRefreshToken, cfg.OIDCIDToken)
 	}
 }
+
+// TestOIDCStaticIDTokenWithoutIssuerAccepted: the static path never contacts the
+// issuer, so issuer/client id are not required when only --oidc-id-token is set.
+func TestOIDCStaticIDTokenWithoutIssuerAccepted(t *testing.T) {
+	clearEnv(t)
+	cfg, err := Load(baseArgs(
+		"--api-key", "k", "--auth", "oidc",
+		"--oidc-id-token", "header.payload.sig",
+	))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.OIDCIDToken != "header.payload.sig" {
+		t.Errorf("static id_token not stored: %q", cfg.OIDCIDToken)
+	}
+}
+
+// TestOIDCRefreshTokenStillRequiresIssuer: the refresh_token grant does contact
+// the issuer, so issuer/client id remain mandatory on that path.
+func TestOIDCRefreshTokenStillRequiresIssuer(t *testing.T) {
+	clearEnv(t)
+	_, err := Load(baseArgs(
+		"--api-key", "k", "--auth", "oidc",
+		"--oidc-refresh-token", "r",
+	))
+	if err == nil {
+		t.Fatal("expected error: refresh_token grant requires issuer and client id")
+	}
+}
