@@ -84,6 +84,41 @@ func (f *fakeProvider) SyncPayload(context.Context) (SyncPayload, error) {
 	return SyncPayload{ExternalID: "x", Email: "x@example.com", DisplayName: "X"}, nil
 }
 
+// oidcFakeProvider returns an identity carrying a raw id_token, mirroring the
+// OIDC provider so we can assert the token reaches the sync body.
+type oidcFakeProvider struct{}
+
+func (oidcFakeProvider) SyncPayload(context.Context) (SyncPayload, error) {
+	return SyncPayload{ExternalID: "user-123", Email: "u@example.com", DisplayName: "U", IDToken: "header.payload.sig"}, nil
+}
+
+func TestSyncForwardsIDTokenInBody(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/auth/sync":
+			_ = json.NewDecoder(r.Body).Decode(&gotBody)
+			_ = json.NewEncoder(w).Encode(map[string]any{"access_token": "tok", "expires_in": 3600})
+		case "/api/v1/items/abc":
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": "abc"})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, oidcFakeProvider{}, srv.Client(), nil)
+	if _, err := c.Request(context.Background(), http.MethodGet, "/items/abc", nil, nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotBody["id_token"] != "header.payload.sig" {
+		t.Errorf("sync body id_token = %v, want the raw token forwarded to the backend", gotBody["id_token"])
+	}
+	if gotBody["external_id"] != "user-123" {
+		t.Errorf("sync body external_id = %v, want user-123", gotBody["external_id"])
+	}
+}
+
 func TestRequestResyncsOnceOn401(t *testing.T) {
 	var syncCount, itemCalls int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -6,6 +6,31 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-06-15
+
+### Added
+- `--oidc-id-token` / `MCP_OIDC_ID_TOKEN`: a static OIDC `id_token` source for
+  issuers that do not issue refresh tokens. Treated as a secret (env-only
+  default, never echoed in `--help` or flag-error usage).
+
+### Changed
+- OIDC mode now forwards the raw `id_token` in the `/auth/sync` body so a backend
+  running in OIDC mode validates it against the issuer's JWKS. Previously only the
+  projected `external_id` / `email` / `display_name` were sent, which an
+  OIDC-validating backend rejected with `401` — the connector could not
+  authenticate at all. Local claim decoding is kept only to populate the
+  convenience fields.
+- The refresh-token grant is now optional. OIDC mode accepts **either**
+  `--oidc-refresh-token` (durable — a fresh `id_token` is minted per sync) **or**
+  `--oidc-id-token` (static fallback). `--oidc-issuer-url` / `--oidc-client-id`
+  are required only on the refresh-token path; the static path never contacts the
+  issuer.
+
+### Fixed
+- A statically configured `id_token` that has already expired now fails fast with
+  an actionable error instead of being forwarded, which would otherwise re-sync
+  against `/auth/sync` on every request with no backoff.
+
 ## [1.0.1] - 2026-06-13
 
 ### Added

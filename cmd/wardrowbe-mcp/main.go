@@ -150,6 +150,7 @@ func buildProvider(cfg config.Config) (wardrowbe.TokenProvider, error) {
 			ClientID:      cfg.OIDCClientID,
 			ClientSecret:  cfg.OIDCClientSecret,
 			RefreshToken:  cfg.OIDCRefreshToken,
+			IDToken:       cfg.OIDCIDToken,
 			TokenEndpoint: cfg.OIDCTokenEndpoint,
 			HTTPClient:    &http.Client{Timeout: 30 * time.Second},
 		}, nil
