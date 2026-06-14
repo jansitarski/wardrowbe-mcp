@@ -44,14 +44,27 @@ func (d DevTokenProvider) SyncPayload(_ context.Context) (SyncPayload, error) {
 	return SyncPayload{ExternalID: d.ExternalID, Email: d.Email, DisplayName: display}, nil
 }
 
-// OIDCTokenProvider exchanges a refresh token for an id_token and projects its
-// claims (sub, email, name) into a SyncPayload. Its methods use pointer receivers
-// so the discovered token endpoint can be cached across calls.
+// OIDCTokenProvider yields an id_token and projects its claims (sub, email,
+// name) into a SyncPayload, forwarding the raw id_token so the backend can
+// validate it against the issuer's JWKS. Its methods use pointer receivers so
+// the discovered token endpoint (and any rotated refresh token) can be cached
+// across calls.
+//
+// The id_token is obtained one of two ways:
+//   - RefreshToken set: run the refresh_token grant against the issuer's token
+//     endpoint on every sync, so each call gets a freshly-minted id_token. This
+//     is the durable path for long-running servers.
+//   - RefreshToken empty, IDToken set: use the static IDToken as-is. Simpler to
+//     configure, but the token expires and is not renewed — for issuers that do
+//     not support the refresh_token grant, accepting that the connection must be
+//     reconfigured when the token lapses.
 type OIDCTokenProvider struct {
 	Issuer       string
 	ClientID     string
 	ClientSecret string
 	RefreshToken string
+	// IDToken is a static id_token used when no RefreshToken is configured.
+	IDToken string
 	// TokenEndpoint, when set, is used directly and discovery is skipped. Must
 	// be https (validated in config). Useful for IdPs whose discovery is
 	// unusual, or to pin the endpoint explicitly.
@@ -80,12 +93,50 @@ type idTokenClaims struct {
 	Name  string `json:"name"`
 }
 
-// SyncPayload implements TokenProvider by refreshing the id_token each call.
-// The JWT cache in Client throttles how often this actually runs.
+// SyncPayload implements TokenProvider. It obtains a current id_token (via the
+// refresh_token grant when a refresh token is configured, otherwise the static
+// id_token), projects its claims, and forwards the raw token so the backend can
+// validate it. The JWT cache in Client throttles how often this actually runs.
 func (o *OIDCTokenProvider) SyncPayload(ctx context.Context) (SyncPayload, error) {
-	tokenEndpoint, err := o.discoverTokenEndpoint(ctx)
+	idToken, err := o.idToken(ctx)
 	if err != nil {
 		return SyncPayload{}, err
+	}
+
+	claims, err := decodeIDTokenClaims(idToken)
+	if err != nil {
+		return SyncPayload{}, err
+	}
+	if claims.Sub == "" {
+		return SyncPayload{}, fmt.Errorf("oidc: id_token missing sub claim")
+	}
+	return SyncPayload{
+		ExternalID:  claims.Sub,
+		Email:       claims.Email,
+		DisplayName: claims.Name,
+		IDToken:     idToken,
+	}, nil
+}
+
+// idToken returns a current id_token. With a refresh token configured it runs
+// the refresh_token grant (the Client's JWT cache bounds the frequency);
+// otherwise it returns the statically-configured id_token as-is.
+func (o *OIDCTokenProvider) idToken(ctx context.Context) (string, error) {
+	if o.RefreshToken == "" {
+		if o.IDToken == "" {
+			return "", fmt.Errorf("oidc: no refresh token or id_token configured")
+		}
+		return o.IDToken, nil
+	}
+	return o.refreshIDToken(ctx)
+}
+
+// refreshIDToken exchanges the configured (or most recently rotated) refresh
+// token for a fresh id_token at the issuer's discovered token endpoint.
+func (o *OIDCTokenProvider) refreshIDToken(ctx context.Context) (string, error) {
+	tokenEndpoint, err := o.discoverTokenEndpoint(ctx)
+	if err != nil {
+		return "", err
 	}
 
 	// Use the most recently issued refresh token: IdPs with rotation enabled
@@ -109,20 +160,20 @@ func (o *OIDCTokenProvider) SyncPayload(ctx context.Context) (SyncPayload, error
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, tokenEndpoint, strings.NewReader(form.Encode()))
 	if err != nil {
-		return SyncPayload{}, fmt.Errorf("oidc: build token request: %w", err)
+		return "", fmt.Errorf("oidc: build token request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
 
 	resp, err := o.client().Do(req)
 	if err != nil {
-		return SyncPayload{}, fmt.Errorf("oidc: token request: %w", err)
+		return "", fmt.Errorf("oidc: token request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxAPIResponseBytes+1))
 	if err != nil {
-		return SyncPayload{}, fmt.Errorf("oidc: read token response: %w", err)
+		return "", fmt.Errorf("oidc: read token response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		// RFC 6749 §5.2: failures arrive as a 400 with a JSON error body. Surface
@@ -131,22 +182,22 @@ func (o *OIDCTokenProvider) SyncPayload(ctx context.Context) (SyncPayload, error
 		var oerr oidcTokenResponse
 		if json.Unmarshal(body, &oerr) == nil && oerr.Error != "" {
 			if oerr.ErrDesc != "" {
-				return SyncPayload{}, fmt.Errorf("oidc: token endpoint returned %d: %s (%s)", resp.StatusCode, oerr.Error, oerr.ErrDesc)
+				return "", fmt.Errorf("oidc: token endpoint returned %d: %s (%s)", resp.StatusCode, oerr.Error, oerr.ErrDesc)
 			}
-			return SyncPayload{}, fmt.Errorf("oidc: token endpoint returned %d: %s", resp.StatusCode, oerr.Error)
+			return "", fmt.Errorf("oidc: token endpoint returned %d: %s", resp.StatusCode, oerr.Error)
 		}
-		return SyncPayload{}, fmt.Errorf("oidc: token endpoint returned %d", resp.StatusCode)
+		return "", fmt.Errorf("oidc: token endpoint returned %d", resp.StatusCode)
 	}
 
 	var tok oidcTokenResponse
 	if err := json.Unmarshal(body, &tok); err != nil {
-		return SyncPayload{}, fmt.Errorf("oidc: decode token response: %w", err)
+		return "", fmt.Errorf("oidc: decode token response: %w", err)
 	}
 	if tok.Error != "" {
-		return SyncPayload{}, fmt.Errorf("oidc: token error %s", tok.Error)
+		return "", fmt.Errorf("oidc: token error %s", tok.Error)
 	}
 	if tok.IDToken == "" {
-		return SyncPayload{}, fmt.Errorf("oidc: token response missing id_token")
+		return "", fmt.Errorf("oidc: token response missing id_token")
 	}
 	if tok.RefreshToken != "" && tok.RefreshToken != refreshToken {
 		// The IdP rotated the refresh token; the old one may now be invalid.
@@ -166,15 +217,7 @@ func (o *OIDCTokenProvider) SyncPayload(ctx context.Context) (SyncPayload, error
 				"and update MCP_OIDC_REFRESH_TOKEN.")
 		}
 	}
-
-	claims, err := decodeIDTokenClaims(tok.IDToken)
-	if err != nil {
-		return SyncPayload{}, err
-	}
-	if claims.Sub == "" {
-		return SyncPayload{}, fmt.Errorf("oidc: id_token missing sub claim")
-	}
-	return SyncPayload{ExternalID: claims.Sub, Email: claims.Email, DisplayName: claims.Name}, nil
+	return tok.IDToken, nil
 }
 
 func (o *OIDCTokenProvider) discoverTokenEndpoint(ctx context.Context) (string, error) {
@@ -249,9 +292,9 @@ func (o *OIDCTokenProvider) client() *http.Client {
 }
 
 // decodeIDTokenClaims extracts the payload of a JWT without verifying its
-// signature. The id_token was just retrieved over TLS directly from the issuer's
-// token endpoint, so transport already authenticates it; the backend re-validates
-// the projected identity on /auth/sync.
+// signature. Local decoding only projects the identity for the sync body's
+// convenience fields; the raw id_token is forwarded alongside it so the backend
+// performs the authoritative signature/issuer validation on /auth/sync.
 func decodeIDTokenClaims(idToken string) (idTokenClaims, error) {
 	parts := strings.Split(idToken, ".")
 	if len(parts) != 3 {

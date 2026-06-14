@@ -64,9 +64,19 @@ wardrobe. Wardrowbe keys users by `external_id`:
   the real address depending on which side synced last. Items key on `user_id`, so this
   is cosmetic — but set it to keep the email stable.
 
-For a real identity provider, use `--auth oidc` with `--oidc-issuer-url`,
-`--oidc-client-id`, and `--oidc-refresh-token` instead; the server exchanges the
-refresh token for an id_token and projects its `sub` / `email` / `name` into the sync.
+For a real identity provider, use `--auth oidc` with `--oidc-issuer-url` and
+`--oidc-client-id`, plus a token source:
+
+- `--oidc-refresh-token` (durable): the server runs the `refresh_token` grant to
+  mint a fresh `id_token` on every sync. Requires an issuer that supports the
+  grant — e.g. for a Cloudflare Access SaaS app, enable refresh tokens on the app
+  and request the `offline_access` scope during the initial authorization.
+- `--oidc-id-token` (fallback): a static `id_token`, used as-is when the issuer
+  does not issue refresh tokens. It expires and is not renewed, so the connection
+  must be reconfigured when it lapses.
+
+Either way the raw `id_token` is forwarded in the `/auth/sync` body — the backend
+validates it against the issuer's JWKS and reads `sub` / `email` / `name` from it.
 
 ## AI backend
 

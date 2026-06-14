@@ -71,6 +71,42 @@ func TestOIDCSyncPayloadHappyPath(t *testing.T) {
 	if got.ExternalID != "user-123" || got.Email != "u@example.com" || got.DisplayName != "User Name" {
 		t.Errorf("payload = %#v", got)
 	}
+	if got.IDToken != idTok {
+		t.Errorf("IDToken = %q, want the raw refreshed id_token to be forwarded", got.IDToken)
+	}
+}
+
+// TestOIDCStaticIDToken covers the optional-refresh path: with no refresh token
+// configured, the provider uses the static id_token directly and never contacts
+// the issuer's token endpoint.
+func TestOIDCStaticIDToken(t *testing.T) {
+	idTok := makeIDToken(map[string]any{"sub": "user-123", "email": "u@example.com", "name": "User Name"})
+	p := &OIDCTokenProvider{
+		Issuer:   "https://issuer.invalid", // must never be contacted
+		ClientID: "client-1",
+		IDToken:  idTok,
+	}
+
+	got, err := p.SyncPayload(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.ExternalID != "user-123" || got.Email != "u@example.com" || got.DisplayName != "User Name" {
+		t.Errorf("payload = %#v", got)
+	}
+	if got.IDToken != idTok {
+		t.Errorf("IDToken = %q, want the static id_token forwarded", got.IDToken)
+	}
+}
+
+// TestOIDCNoTokenSource guards the provider-level invariant that config
+// validation also enforces: with neither a refresh token nor a static id_token,
+// SyncPayload fails rather than sending an empty token.
+func TestOIDCNoTokenSource(t *testing.T) {
+	p := &OIDCTokenProvider{Issuer: "https://issuer.invalid", ClientID: "client-1"}
+	if _, err := p.SyncPayload(context.Background()); err == nil {
+		t.Fatal("expected error: no refresh token or id_token configured")
+	}
 }
 
 func TestOIDCDiscoveryCachedAcrossCalls(t *testing.T) {

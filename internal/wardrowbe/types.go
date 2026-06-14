@@ -6,6 +6,10 @@ type SyncPayload struct {
 	ExternalID  string `json:"external_id"`
 	Email       string `json:"email"`
 	DisplayName string `json:"display_name"`
+	// IDToken is the raw OIDC id_token. It is sent in OIDC mode so a backend
+	// that validates the token against the issuer's JWKS (rather than trusting
+	// the projected claims) can authenticate the request. Empty in dev mode.
+	IDToken string `json:"id_token,omitempty"`
 }
 
 // syncResponse is the backend reply to /auth/sync.

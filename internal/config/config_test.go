@@ -272,3 +272,30 @@ func TestOIDCValidHTTPSIssuerAccepted(t *testing.T) {
 		t.Errorf("token endpoint override not stored: %q", cfg.OIDCTokenEndpoint)
 	}
 }
+
+func TestOIDCRequiresATokenSource(t *testing.T) {
+	clearEnv(t)
+	_, err := Load(baseArgs(
+		"--api-key", "k", "--auth", "oidc",
+		"--oidc-issuer-url", "https://issuer.example.com",
+		"--oidc-client-id", "c",
+	))
+	if err == nil {
+		t.Fatal("expected error: oidc mode missing both refresh token and id_token")
+	}
+}
+
+func TestOIDCStaticIDTokenAccepted(t *testing.T) {
+	clearEnv(t)
+	cfg, err := Load(baseArgs(
+		"--api-key", "k", "--auth", "oidc",
+		"--oidc-issuer-url", "https://issuer.example.com",
+		"--oidc-client-id", "c", "--oidc-id-token", "header.payload.sig",
+	))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.OIDCRefreshToken != "" || cfg.OIDCIDToken != "header.payload.sig" {
+		t.Errorf("unexpected oidc token config: refresh=%q id=%q", cfg.OIDCRefreshToken, cfg.OIDCIDToken)
+	}
+}

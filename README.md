@@ -118,16 +118,25 @@ The most-used ones:
 | `--api-key` | — | Incoming bearer key; **required for http**. Prefer `MCP_API_KEY` env over the flag (argv is visible in `ps`). |
 | `--auth` | `dev` | `dev` or `oidc`. |
 | `--external-id` / `--external-email` | — | Dev identity sent to `/auth/sync`. |
+| `--oidc-issuer-url` / `--oidc-client-id` | — | OIDC issuer + client (required for `--auth oidc`). |
+| `--oidc-refresh-token` | — | Enables the `refresh_token` grant: a fresh `id_token` is minted per sync. |
+| `--oidc-id-token` | — | Static `id_token` used when no refresh token is configured. |
 | `--oidc-token-endpoint` | — | Optional https token-endpoint override (skips OIDC discovery). |
 | `--max-concurrent` | `16` | In-flight `/mcp` request cap. |
 | `--max-body-mb` | `40` | Inbound `/mcp` body cap. |
 | `--portal-resource-url` | — | Emits the RFC 9728 `resource_metadata` on `401`. |
 
+In `oidc` mode the raw `id_token` is forwarded in the `/auth/sync` body so the
+backend validates it against the issuer's JWKS. Supply **either** a
+`--oidc-refresh-token` (the durable path — the server refreshes the token on
+every sync) **or** a static `--oidc-id-token` (the fallback for issuers that do
+not issue refresh tokens; it expires and is not renewed).
+
 Run `wardrowbe-mcp --help` for the complete flag list, including the image and OIDC
 options. Every flag also has an `MCP_*` (or `WARDROWBE_URL`) environment variable;
 see [`.env.example`](.env.example) for the full list. Secrets (`MCP_API_KEY`,
-`MCP_OIDC_CLIENT_SECRET`, `MCP_OIDC_REFRESH_TOKEN`) are never echoed in `--help`
-output or flag-error usage text.
+`MCP_OIDC_CLIENT_SECRET`, `MCP_OIDC_REFRESH_TOKEN`, `MCP_OIDC_ID_TOKEN`) are never
+echoed in `--help` output or flag-error usage text.
 
 ## Troubleshooting
 
