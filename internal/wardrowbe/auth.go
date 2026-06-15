@@ -299,18 +299,18 @@ func persistRefreshToken(path, token string) error {
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName) // no-op if the rename succeeded
 	if _, err := tmp.WriteString(token); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return fmt.Errorf("write temp: %w", err)
 	}
 	if err := tmp.Chmod(0o600); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return fmt.Errorf("chmod temp: %w", err)
 	}
 	// fsync the data before the rename: with single-use rotation, a crash that
 	// loses the just-written bytes would leave the renamed file holding the
 	// already-consumed token — exactly the dead-token failure this file prevents.
 	if err := tmp.Sync(); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return fmt.Errorf("sync temp: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
@@ -318,12 +318,6 @@ func persistRefreshToken(path, token string) error {
 	}
 	if err := os.Rename(tmpName, path); err != nil {
 		return fmt.Errorf("rename: %w", err)
-	}
-	// fsync the directory so the rename itself survives a crash. Best-effort:
-	// not all filesystems require or support it, and the data is already durable.
-	if d, err := os.Open(dir); err == nil {
-		_ = d.Sync()
-		_ = d.Close()
 	}
 	return nil
 }
