@@ -6,6 +6,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.0.4] - 2026-06-15
+
 ### Added
 - `--oidc-refresh-token-file` / `MCP_OIDC_REFRESH_TOKEN_FILE`: a path (not a
   secret) on a persistent volume where the rotated refresh token is persisted
