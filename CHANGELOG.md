@@ -6,6 +6,16 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- `--oidc-refresh-token-file` / `MCP_OIDC_REFRESH_TOKEN_FILE`: a path (not a
+  secret) on a persistent volume where the rotated refresh token is persisted
+  and reloaded across restarts. Required for IdPs that rotate refresh tokens
+  single-use (e.g. Cloudflare Access), which would otherwise invalidate the
+  configured seed after the first refresh and break auth on every pod restart.
+  The latest rotation is loaded on startup (in preference to the seed) and each
+  rotation is written back atomically (temp file + `fsync` + rename, `0600`); a
+  pre-populated file alone can bootstrap the refresh grant without a seed.
+
 ## [1.0.3] - 2026-06-15
 
 ### Fixed

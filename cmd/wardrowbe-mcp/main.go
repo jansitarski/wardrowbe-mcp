@@ -146,13 +146,14 @@ func buildProvider(cfg config.Config) (wardrowbe.TokenProvider, error) {
 		}, nil
 	case config.AuthOIDC:
 		return &wardrowbe.OIDCTokenProvider{
-			Issuer:        cfg.OIDCIssuerURL,
-			ClientID:      cfg.OIDCClientID,
-			ClientSecret:  cfg.OIDCClientSecret,
-			RefreshToken:  cfg.OIDCRefreshToken,
-			IDToken:       cfg.OIDCIDToken,
-			TokenEndpoint: cfg.OIDCTokenEndpoint,
-			HTTPClient:    &http.Client{Timeout: 30 * time.Second},
+			Issuer:           cfg.OIDCIssuerURL,
+			ClientID:         cfg.OIDCClientID,
+			ClientSecret:     cfg.OIDCClientSecret,
+			RefreshToken:     cfg.OIDCRefreshToken,
+			RefreshTokenFile: cfg.OIDCRefreshTokenFile,
+			IDToken:          cfg.OIDCIDToken,
+			TokenEndpoint:    cfg.OIDCTokenEndpoint,
+			HTTPClient:       &http.Client{Timeout: 30 * time.Second},
 		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported auth mode %q", cfg.AuthMode)

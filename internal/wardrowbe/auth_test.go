@@ -8,11 +8,127 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 )
+
+// startOIDCCapturing serves discovery + a /token endpoint whose handler receives
+// the parsed request, so tests can assert which refresh_token was posted and
+// return a dynamic body.
+func startOIDCCapturing(t *testing.T, tokenFn func(r *http.Request) (int, string)) (*OIDCTokenProvider, func()) {
+	t.Helper()
+	var srv *httptest.Server
+	mux := http.NewServeMux()
+	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"token_endpoint":"`+srv.URL+`/token"}`)
+	})
+	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		code, body := tokenFn(r)
+		w.WriteHeader(code)
+		_, _ = io.WriteString(w, body)
+	})
+	srv = httptest.NewTLSServer(mux)
+	p := &OIDCTokenProvider{Issuer: srv.URL, ClientID: "client-1", HTTPClient: srv.Client()}
+	return p, srv.Close
+}
+
+// TestOIDCRefreshTokenFileLoadedOnStartup: the persisted token (a previous
+// rotation) is used over the now-dead configured seed.
+func TestOIDCRefreshTokenFileLoadedOnStartup(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "rt")
+	if err := os.WriteFile(file, []byte("file-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var sentRT string
+	p, stop := startOIDCCapturing(t, func(r *http.Request) (int, string) {
+		sentRT = r.PostFormValue("refresh_token")
+		return 200, `{"id_token":"` + makeIDToken(map[string]any{"sub": "u1"}) + `"}`
+	})
+	defer stop()
+	p.RefreshToken = "seed-token" // must lose to the file
+	p.RefreshTokenFile = file
+
+	if _, err := p.SyncPayload(context.Background()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if sentRT != "file-token" {
+		t.Errorf("posted refresh_token = %q, want the file token to win over the seed", sentRT)
+	}
+}
+
+// TestOIDCRefreshTokenFilePersistedOnRotation: a rotated refresh token is written
+// back to the file so a restart resumes from it.
+func TestOIDCRefreshTokenFilePersistedOnRotation(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "rt")
+	p, stop := startOIDCCapturing(t, func(r *http.Request) (int, string) {
+		return 200, `{"id_token":"` + makeIDToken(map[string]any{"sub": "u1"}) + `","refresh_token":"rotated-1"}`
+	})
+	defer stop()
+	p.RefreshToken = "seed-token"
+	p.RefreshTokenFile = file
+
+	if _, err := p.SyncPayload(context.Background()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	data, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatalf("read persisted token: %v", err)
+	}
+	if strings.TrimSpace(string(data)) != "rotated-1" {
+		t.Errorf("persisted token = %q, want rotated-1", strings.TrimSpace(string(data)))
+	}
+}
+
+// TestOIDCRefreshTokenFileOnlyBootstrap: a file-only config (no seed) must route
+// into the refresh grant and use the pre-populated file token. This guards the
+// documented bootstrap path — writing the initial token to the file — which the
+// static-vs-refresh dispatch would otherwise mistake for "no token configured".
+func TestOIDCRefreshTokenFileOnlyBootstrap(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "rt")
+	if err := os.WriteFile(file, []byte("bootstrap-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var sentRT string
+	p, stop := startOIDCCapturing(t, func(r *http.Request) (int, string) {
+		sentRT = r.PostFormValue("refresh_token")
+		return 200, `{"id_token":"` + makeIDToken(map[string]any{"sub": "u1"}) + `"}`
+	})
+	defer stop()
+	p.RefreshTokenFile = file // no RefreshToken seed
+
+	if _, err := p.SyncPayload(context.Background()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if sentRT != "bootstrap-token" {
+		t.Errorf("posted refresh_token = %q, want the file token used as the bootstrap", sentRT)
+	}
+}
+
+// TestOIDCRefreshTokenFileEmptyNoSeed: file-only with an absent file and no seed
+// fails fast with an actionable error rather than POSTing an empty refresh_token.
+func TestOIDCRefreshTokenFileEmptyNoSeed(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "absent-rt")
+	tokenCalled := false
+	p, stop := startOIDCCapturing(t, func(r *http.Request) (int, string) {
+		tokenCalled = true
+		return 200, `{}`
+	})
+	defer stop()
+	p.RefreshTokenFile = file // no seed, file does not exist
+
+	_, err := p.SyncPayload(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "refresh token file") {
+		t.Fatalf("err = %v, want an actionable empty-file error", err)
+	}
+	if tokenCalled {
+		t.Error("token endpoint must not be called with an empty refresh_token")
+	}
+}
 
 // makeIDToken builds an unsigned-payload JWT carrying the given claims. The
 // provider decodes the payload without verifying the signature (the token is

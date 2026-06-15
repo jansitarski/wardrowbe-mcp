@@ -120,6 +120,7 @@ The most-used ones:
 | `--external-id` / `--external-email` | — | Dev identity sent to `/auth/sync`. |
 | `--oidc-issuer-url` / `--oidc-client-id` | — | OIDC issuer + client (required with `--oidc-refresh-token`; unused with a static `--oidc-id-token`). |
 | `--oidc-refresh-token` | — | Enables the `refresh_token` grant: a fresh `id_token` is minted per sync. |
+| `--oidc-refresh-token-file` | — | Persists+reloads the rotated refresh token across restarts (see below). |
 | `--oidc-id-token` | — | Static `id_token` used when no refresh token is configured. |
 | `--oidc-token-endpoint` | — | Optional https token-endpoint override (skips OIDC discovery). |
 | `--max-concurrent` | `16` | In-flight `/mcp` request cap. |
@@ -131,6 +132,14 @@ backend validates it against the issuer's JWKS. Supply **either** a
 `--oidc-refresh-token` (the durable path — the server refreshes the token on
 every sync) **or** a static `--oidc-id-token` (the fallback for issuers that do
 not issue refresh tokens; it expires and is not renewed).
+
+**Rotating refresh tokens.** Some IdPs (e.g. Cloudflare Access) rotate the
+refresh token on every use and invalidate the previous one. The server tracks
+the rotation in memory, but a restart would then fall back to the now-dead
+configured seed. Set `--oidc-refresh-token-file` (`MCP_OIDC_REFRESH_TOKEN_FILE`)
+to a path on a persistent volume: each rotation is written there and the latest
+is reloaded on startup, so restarts survive. The configured `--oidc-refresh-token`
+is only the initial seed used until the first rotation populates the file.
 
 Run `wardrowbe-mcp --help` for the complete flag list, including the image and OIDC
 options. Every flag also has an `MCP_*` (or `WARDROWBE_URL`) environment variable;
