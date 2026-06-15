@@ -110,6 +110,37 @@ func TestOIDCNoTokenSource(t *testing.T) {
 	}
 }
 
+// TestOIDCDisplayNameFallback covers issuers that omit the `name` claim (e.g.
+// Cloudflare Access refresh-grant id_tokens carry only `sub`). The backend
+// requires a non-empty display_name, so the provider must fall back to email,
+// then sub, rather than send an empty string.
+func TestOIDCDisplayNameFallback(t *testing.T) {
+	cases := []struct {
+		name        string
+		claims      map[string]any
+		wantDisplay string
+	}{
+		{"name present", map[string]any{"sub": "u1", "email": "u@example.com", "name": "User One"}, "User One"},
+		{"name missing falls back to email", map[string]any{"sub": "u1", "email": "u@example.com"}, "u@example.com"},
+		{"name and email missing falls back to sub", map[string]any{"sub": "u1"}, "u1"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := &OIDCTokenProvider{Issuer: "https://issuer.invalid", ClientID: "c", IDToken: makeIDToken(tc.claims)}
+			got, err := p.SyncPayload(context.Background())
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got.DisplayName != tc.wantDisplay {
+				t.Errorf("DisplayName = %q, want %q", got.DisplayName, tc.wantDisplay)
+			}
+			if got.DisplayName == "" {
+				t.Error("DisplayName must never be empty (backend requires >= 1 char)")
+			}
+		})
+	}
+}
+
 // TestOIDCStaticIDTokenExpired fails fast on an already-expired static token
 // instead of forwarding it (which would re-sync on every request with no
 // backoff once the backend rejects it).
