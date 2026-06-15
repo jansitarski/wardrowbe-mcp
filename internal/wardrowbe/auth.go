@@ -147,7 +147,10 @@ func (o *OIDCTokenProvider) SyncPayload(ctx context.Context) (SyncPayload, error
 // the refresh_token grant (the Client's JWT cache bounds the frequency);
 // otherwise it returns the statically-configured id_token as-is.
 func (o *OIDCTokenProvider) idToken(ctx context.Context) (string, error) {
-	if o.RefreshToken == "" {
+	// Select the refresh_token grant when a seed token OR a persisted token-file
+	// is configured: the file may carry a rotation from a previous process even
+	// when no seed is set (the durable bootstrap path), so it must route here too.
+	if o.RefreshToken == "" && o.RefreshTokenFile == "" {
 		if o.IDToken == "" {
 			return "", fmt.Errorf("oidc: no refresh token or id_token configured")
 		}
@@ -167,11 +170,9 @@ func (o *OIDCTokenProvider) idToken(ctx context.Context) (string, error) {
 // refreshIDToken exchanges the configured (or most recently rotated) refresh
 // token for a fresh id_token at the issuer's discovered token endpoint.
 func (o *OIDCTokenProvider) refreshIDToken(ctx context.Context) (string, error) {
-	tokenEndpoint, err := o.discoverTokenEndpoint(ctx)
-	if err != nil {
-		return "", err
-	}
-
+	// Resolve the refresh token first (cheap and local) so we fail fast without a
+	// wasted discovery round-trip when none is available yet.
+	//
 	// Use the most recently issued refresh token: IdPs with rotation enabled
 	// (Auth0, Okta, Keycloak with reuse detection) invalidate the old one on
 	// every grant, so re-POSTing the original would fail the second refresh.
@@ -194,6 +195,18 @@ func (o *OIDCTokenProvider) refreshIDToken(ctx context.Context) (string, error) 
 	o.mu.Unlock()
 	if refreshToken == "" {
 		refreshToken = o.RefreshToken
+	}
+	if refreshToken == "" {
+		// Reached only on the file-only path with an empty/absent file and no
+		// seed (a configured seed makes this non-empty). Fail with an actionable
+		// message instead of POSTing a blank refresh_token for an opaque error.
+		return "", fmt.Errorf("oidc: refresh token file %q is empty and no --oidc-refresh-token seed is set; "+
+			"write the initial refresh token to the file or set MCP_OIDC_REFRESH_TOKEN", o.RefreshTokenFile)
+	}
+
+	tokenEndpoint, err := o.discoverTokenEndpoint(ctx)
+	if err != nil {
+		return "", err
 	}
 
 	form := url.Values{
@@ -293,11 +306,24 @@ func persistRefreshToken(path, token string) error {
 		tmp.Close()
 		return fmt.Errorf("chmod temp: %w", err)
 	}
+	// fsync the data before the rename: with single-use rotation, a crash that
+	// loses the just-written bytes would leave the renamed file holding the
+	// already-consumed token — exactly the dead-token failure this file prevents.
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return fmt.Errorf("sync temp: %w", err)
+	}
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("close temp: %w", err)
 	}
 	if err := os.Rename(tmpName, path); err != nil {
 		return fmt.Errorf("rename: %w", err)
+	}
+	// fsync the directory so the rename itself survives a crash. Best-effort:
+	// not all filesystems require or support it, and the data is already durable.
+	if d, err := os.Open(dir); err == nil {
+		_ = d.Sync()
+		_ = d.Close()
 	}
 	return nil
 }

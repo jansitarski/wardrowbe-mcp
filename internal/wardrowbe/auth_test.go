@@ -84,6 +84,52 @@ func TestOIDCRefreshTokenFilePersistedOnRotation(t *testing.T) {
 	}
 }
 
+// TestOIDCRefreshTokenFileOnlyBootstrap: a file-only config (no seed) must route
+// into the refresh grant and use the pre-populated file token. This guards the
+// documented bootstrap path — writing the initial token to the file — which the
+// static-vs-refresh dispatch would otherwise mistake for "no token configured".
+func TestOIDCRefreshTokenFileOnlyBootstrap(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "rt")
+	if err := os.WriteFile(file, []byte("bootstrap-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var sentRT string
+	p, stop := startOIDCCapturing(t, func(r *http.Request) (int, string) {
+		sentRT = r.PostFormValue("refresh_token")
+		return 200, `{"id_token":"` + makeIDToken(map[string]any{"sub": "u1"}) + `"}`
+	})
+	defer stop()
+	p.RefreshTokenFile = file // no RefreshToken seed
+
+	if _, err := p.SyncPayload(context.Background()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if sentRT != "bootstrap-token" {
+		t.Errorf("posted refresh_token = %q, want the file token used as the bootstrap", sentRT)
+	}
+}
+
+// TestOIDCRefreshTokenFileEmptyNoSeed: file-only with an absent file and no seed
+// fails fast with an actionable error rather than POSTing an empty refresh_token.
+func TestOIDCRefreshTokenFileEmptyNoSeed(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "absent-rt")
+	tokenCalled := false
+	p, stop := startOIDCCapturing(t, func(r *http.Request) (int, string) {
+		tokenCalled = true
+		return 200, `{}`
+	})
+	defer stop()
+	p.RefreshTokenFile = file // no seed, file does not exist
+
+	_, err := p.SyncPayload(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "refresh token file") {
+		t.Fatalf("err = %v, want an actionable empty-file error", err)
+	}
+	if tokenCalled {
+		t.Error("token endpoint must not be called with an empty refresh_token")
+	}
+}
+
 // makeIDToken builds an unsigned-payload JWT carrying the given claims. The
 // provider decodes the payload without verifying the signature (the token is
 // fetched over TLS straight from the issuer), so the signature is a placeholder.
