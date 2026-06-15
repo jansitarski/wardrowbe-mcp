@@ -6,6 +6,16 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.0.3] - 2026-06-15
+
+### Fixed
+- OIDC `/auth/sync` no longer fails with HTTP 422 when the `id_token` omits the
+  `name` claim. The backend requires a non-empty `display_name`, but `name` is
+  optional and some issuers omit it (e.g. Cloudflare Access id_tokens minted via
+  the `refresh_token` grant carry only `sub`). `display_name` now falls back
+  `name` → `email` → `sub`, with each candidate trimmed so a whitespace-only
+  claim can't slip through as a blank name.
+
 ## [1.0.2] - 2026-06-15
 
 ### Added

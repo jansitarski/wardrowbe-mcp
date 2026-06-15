@@ -123,6 +123,8 @@ func TestOIDCDisplayNameFallback(t *testing.T) {
 		{"name present", map[string]any{"sub": "u1", "email": "u@example.com", "name": "User One"}, "User One"},
 		{"name missing falls back to email", map[string]any{"sub": "u1", "email": "u@example.com"}, "u@example.com"},
 		{"name and email missing falls back to sub", map[string]any{"sub": "u1"}, "u1"},
+		{"blank name falls back to email", map[string]any{"sub": "u1", "email": "u@example.com", "name": "   "}, "u@example.com"},
+		{"blank name and email fall back to sub", map[string]any{"sub": "u1", "email": "  ", "name": "\t"}, "u1"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
