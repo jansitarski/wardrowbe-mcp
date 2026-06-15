@@ -147,6 +147,30 @@ see [`.env.example`](.env.example) for the full list. Secrets (`MCP_API_KEY`,
 `MCP_OIDC_CLIENT_SECRET`, `MCP_OIDC_REFRESH_TOKEN`, `MCP_OIDC_ID_TOKEN`) are never
 echoed in `--help` output or flag-error usage text.
 
+## Minting a refresh token (`login`)
+
+OIDC mode needs a refresh token. Rather than hand-running an OAuth flow, use the
+built-in `login` subcommand — it runs the Authorization Code + PKCE flow over a
+**loopback redirect** (RFC 8252): it opens your browser, captures the callback on
+a local listener, exchanges the code, and prints the refresh token. This is a
+one-shot interactive helper (the headless server can't do it — there's no
+browser); it works against any OIDC issuer.
+
+```bash
+wardrowbe-mcp login \
+  --oidc-issuer-url https://issuer.example.com \
+  --oidc-client-id "$CLIENT_ID" \
+  --oidc-client-secret "$CLIENT_SECRET" \   # omit for public clients
+  --scopes "openid email profile offline_access"   # offline_access => refresh token
+# prints the refresh token to stdout; human messages go to stderr
+```
+
+The redirect (`--redirect-url`, default `http://127.0.0.1:8976/callback`) must be
+registered on the OAuth app. Endpoints come from issuer discovery, or pin them with
+`--oidc-auth-endpoint` / `--oidc-token-endpoint`. Pass `--oidc-refresh-token-file`
+to also write the token to a file, or `--no-browser` to print the URL only. Feed the
+result back as `MCP_OIDC_REFRESH_TOKEN`.
+
 ## Troubleshooting
 
 | Symptom | Likely cause | Fix |

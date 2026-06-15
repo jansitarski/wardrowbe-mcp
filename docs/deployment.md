@@ -71,7 +71,9 @@ For a real identity provider, use `--auth oidc` with a token source:
   `--oidc-client-id` (the issuer's token endpoint is contacted on each refresh),
   and an issuer that supports the grant — e.g. for a Cloudflare Access SaaS app,
   enable refresh tokens on the app and request the `offline_access` scope during
-  the initial authorization.
+  the initial authorization. Get the token with `wardrowbe-mcp login` (the
+  Authorization Code + PKCE loopback helper — see the README's "Minting a refresh
+  token" section); feed its output back as `MCP_OIDC_REFRESH_TOKEN`.
   - **Rotating IdPs** (Cloudflare Access rotates the refresh token single-use and
     invalidates the previous one): also set `--oidc-refresh-token-file` to a path
     on a **persistent volume**. Each rotation is written there and reloaded on
