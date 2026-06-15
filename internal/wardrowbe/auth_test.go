@@ -8,11 +8,81 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 )
+
+// startOIDCCapturing serves discovery + a /token endpoint whose handler receives
+// the parsed request, so tests can assert which refresh_token was posted and
+// return a dynamic body.
+func startOIDCCapturing(t *testing.T, tokenFn func(r *http.Request) (int, string)) (*OIDCTokenProvider, func()) {
+	t.Helper()
+	var srv *httptest.Server
+	mux := http.NewServeMux()
+	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"token_endpoint":"`+srv.URL+`/token"}`)
+	})
+	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		code, body := tokenFn(r)
+		w.WriteHeader(code)
+		_, _ = io.WriteString(w, body)
+	})
+	srv = httptest.NewTLSServer(mux)
+	p := &OIDCTokenProvider{Issuer: srv.URL, ClientID: "client-1", HTTPClient: srv.Client()}
+	return p, srv.Close
+}
+
+// TestOIDCRefreshTokenFileLoadedOnStartup: the persisted token (a previous
+// rotation) is used over the now-dead configured seed.
+func TestOIDCRefreshTokenFileLoadedOnStartup(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "rt")
+	if err := os.WriteFile(file, []byte("file-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var sentRT string
+	p, stop := startOIDCCapturing(t, func(r *http.Request) (int, string) {
+		sentRT = r.PostFormValue("refresh_token")
+		return 200, `{"id_token":"` + makeIDToken(map[string]any{"sub": "u1"}) + `"}`
+	})
+	defer stop()
+	p.RefreshToken = "seed-token" // must lose to the file
+	p.RefreshTokenFile = file
+
+	if _, err := p.SyncPayload(context.Background()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if sentRT != "file-token" {
+		t.Errorf("posted refresh_token = %q, want the file token to win over the seed", sentRT)
+	}
+}
+
+// TestOIDCRefreshTokenFilePersistedOnRotation: a rotated refresh token is written
+// back to the file so a restart resumes from it.
+func TestOIDCRefreshTokenFilePersistedOnRotation(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "rt")
+	p, stop := startOIDCCapturing(t, func(r *http.Request) (int, string) {
+		return 200, `{"id_token":"` + makeIDToken(map[string]any{"sub": "u1"}) + `","refresh_token":"rotated-1"}`
+	})
+	defer stop()
+	p.RefreshToken = "seed-token"
+	p.RefreshTokenFile = file
+
+	if _, err := p.SyncPayload(context.Background()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	data, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatalf("read persisted token: %v", err)
+	}
+	if strings.TrimSpace(string(data)) != "rotated-1" {
+		t.Errorf("persisted token = %q, want rotated-1", strings.TrimSpace(string(data)))
+	}
+}
 
 // makeIDToken builds an unsigned-payload JWT carrying the given claims. The
 // provider decodes the payload without verifying the signature (the token is

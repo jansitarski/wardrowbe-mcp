@@ -14,7 +14,7 @@ var allEnvKeys = []string{
 	"WARDROWBE_URL", "MCP_API_KEY",
 	"MCP_AUTH_MODE", "MCP_EXTERNAL_ID", "MCP_EXTERNAL_EMAIL",
 	"MCP_OIDC_ISSUER_URL", "MCP_OIDC_CLIENT_ID", "MCP_OIDC_TOKEN_ENDPOINT",
-	"MCP_OIDC_CLIENT_SECRET", "MCP_OIDC_REFRESH_TOKEN",
+	"MCP_OIDC_CLIENT_SECRET", "MCP_OIDC_REFRESH_TOKEN", "MCP_OIDC_REFRESH_TOKEN_FILE",
 	"MCP_LOG_LEVEL", "MCP_IMAGE_MAX_DIM", "MCP_IMAGE_VARIANT",
 	"MCP_PORTAL_RESOURCE_URL", "MCP_MAX_CONCURRENT", "MCP_MAX_BODY_MB",
 }
@@ -282,6 +282,21 @@ func TestOIDCRequiresATokenSource(t *testing.T) {
 	))
 	if err == nil {
 		t.Fatal("expected error: oidc mode missing both refresh token and id_token")
+	}
+}
+
+func TestOIDCRefreshTokenFileIsATokenSource(t *testing.T) {
+	clearEnv(t)
+	cfg, err := Load(baseArgs(
+		"--api-key", "k", "--auth", "oidc",
+		"--oidc-issuer-url", "https://issuer.example.com",
+		"--oidc-client-id", "c", "--oidc-refresh-token-file", "/var/run/mcp/rt",
+	))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.OIDCRefreshTokenFile != "/var/run/mcp/rt" {
+		t.Errorf("refresh token file not stored: %q", cfg.OIDCRefreshTokenFile)
 	}
 }
 

@@ -72,6 +72,13 @@ For a real identity provider, use `--auth oidc` with a token source:
   and an issuer that supports the grant — e.g. for a Cloudflare Access SaaS app,
   enable refresh tokens on the app and request the `offline_access` scope during
   the initial authorization.
+  - **Rotating IdPs** (Cloudflare Access rotates the refresh token single-use and
+    invalidates the previous one): also set `--oidc-refresh-token-file` to a path
+    on a **persistent volume**. Each rotation is written there and reloaded on
+    startup, so a pod restart resumes from the latest token instead of the
+    spent seed. `--oidc-refresh-token` is then just the bootstrap seed used until
+    the first rotation populates the file. The container runs non-root, so make
+    the volume writable by its user (`fsGroup`).
 - `--oidc-id-token` (fallback): a static `id_token`, used as-is when the issuer
   does not issue refresh tokens. The issuer is never contacted, so `--oidc-issuer-url`
   and `--oidc-client-id` are optional on this path. The token expires and is not

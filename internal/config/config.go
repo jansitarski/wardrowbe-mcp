@@ -70,12 +70,13 @@ type Config struct {
 	ExternalID    string
 	ExternalEmail string
 
-	OIDCIssuerURL     string
-	OIDCClientID      string
-	OIDCClientSecret  string
-	OIDCRefreshToken  string
-	OIDCIDToken       string // static id_token, used when no refresh token is set
-	OIDCTokenEndpoint string // optional override; skips discovery when set
+	OIDCIssuerURL        string
+	OIDCClientID         string
+	OIDCClientSecret     string
+	OIDCRefreshToken     string
+	OIDCIDToken          string // static id_token, used when no refresh token is set
+	OIDCRefreshTokenFile string // optional: persist+reload the rotated refresh token here
+	OIDCTokenEndpoint    string // optional override; skips discovery when set
 
 	LogLevel string
 
@@ -141,6 +142,7 @@ func Load(args []string) (Config, error) {
 	oidcClientSecret := fs.String("oidc-client-secret", "", "OIDC client secret (prefer env MCP_OIDC_CLIENT_SECRET)")
 	oidcRefreshToken := fs.String("oidc-refresh-token", "", "OIDC refresh token, enables the refresh_token grant (prefer env MCP_OIDC_REFRESH_TOKEN)")
 	oidcIDToken := fs.String("oidc-id-token", "", "static OIDC id_token, used when no refresh token is set (prefer env MCP_OIDC_ID_TOKEN)")
+	oidcRefreshTokenFile := fs.String("oidc-refresh-token-file", envOr("MCP_OIDC_REFRESH_TOKEN_FILE", ""), "path to persist+reload the rotated refresh token across restarts (a path, not a secret)")
 
 	logLevel := fs.String("log-level", envOr("MCP_LOG_LEVEL", defaultLogLevel), "log level")
 
@@ -196,26 +198,27 @@ func Load(args []string) (Config, error) {
 	}
 
 	cfg := Config{
-		Transport:         Transport(strings.ToLower(*transport)),
-		Host:              *host,
-		Port:              *port,
-		WardrowbeURL:      strings.TrimRight(*wardrowbeURL, "/"),
-		APIKey:            *apiKey,
-		AuthMode:          AuthMode(strings.ToLower(*authMode)),
-		ExternalID:        *externalID,
-		ExternalEmail:     *externalEmail,
-		OIDCIssuerURL:     *oidcIssuer,
-		OIDCClientID:      *oidcClientID,
-		OIDCTokenEndpoint: *oidcTokenEndpoint,
-		OIDCClientSecret:  *oidcClientSecret,
-		OIDCRefreshToken:  *oidcRefreshToken,
-		OIDCIDToken:       *oidcIDToken,
-		LogLevel:          strings.ToUpper(*logLevel),
-		ImageMaxDim:       *imageMaxDim,
-		ImageVariant:      ImageVariant(strings.ToLower(*imageVariant)),
-		PortalResourceURL: *portalResourceURL,
-		MaxConcurrent:     *maxConcurrent,
-		MaxBodyBytes:      int64(*maxBodyMB) << 20,
+		Transport:            Transport(strings.ToLower(*transport)),
+		Host:                 *host,
+		Port:                 *port,
+		WardrowbeURL:         strings.TrimRight(*wardrowbeURL, "/"),
+		APIKey:               *apiKey,
+		AuthMode:             AuthMode(strings.ToLower(*authMode)),
+		ExternalID:           *externalID,
+		ExternalEmail:        *externalEmail,
+		OIDCIssuerURL:        *oidcIssuer,
+		OIDCClientID:         *oidcClientID,
+		OIDCTokenEndpoint:    *oidcTokenEndpoint,
+		OIDCClientSecret:     *oidcClientSecret,
+		OIDCRefreshToken:     *oidcRefreshToken,
+		OIDCIDToken:          *oidcIDToken,
+		OIDCRefreshTokenFile: *oidcRefreshTokenFile,
+		LogLevel:             strings.ToUpper(*logLevel),
+		ImageMaxDim:          *imageMaxDim,
+		ImageVariant:         ImageVariant(strings.ToLower(*imageVariant)),
+		PortalResourceURL:    *portalResourceURL,
+		MaxConcurrent:        *maxConcurrent,
+		MaxBodyBytes:         int64(*maxBodyMB) << 20,
 	}
 
 	if cfg.ExternalEmail == "" {
@@ -241,18 +244,19 @@ func (c Config) validate() error {
 			return errors.New("dev mode requires a non-empty --external-id (MCP_EXTERNAL_ID)")
 		}
 	case AuthOIDC:
-		// The id_token comes from one of two sources. The refresh_token grant is
-		// the durable path; a static id_token is the fallback for issuers that do
-		// not issue refresh tokens (it expires and is not renewed).
-		if c.OIDCRefreshToken == "" && c.OIDCIDToken == "" {
-			return errors.New("oidc mode requires one of --oidc-refresh-token (refresh_token grant) or --oidc-id-token (static token)")
+		// The id_token comes from one of two paths. The refresh_token grant is
+		// the durable path, seeded by --oidc-refresh-token and/or persisted in
+		// --oidc-refresh-token-file; a static id_token is the fallback for issuers
+		// that do not issue refresh tokens (it expires and is not renewed).
+		if c.OIDCRefreshToken == "" && c.OIDCIDToken == "" && c.OIDCRefreshTokenFile == "" {
+			return errors.New("oidc mode requires one of --oidc-refresh-token / --oidc-refresh-token-file (refresh_token grant) or --oidc-id-token (static token)")
 		}
 		// Only the refresh_token grant contacts the issuer (discovery + token
-		// endpoint), so it needs the issuer and client id. A static id_token is
-		// forwarded as-is and never touches the issuer, so those are optional on
-		// that path.
-		if c.OIDCRefreshToken != "" && (c.OIDCIssuerURL == "" || c.OIDCClientID == "") {
-			return errors.New("oidc mode with --oidc-refresh-token requires --oidc-issuer-url and --oidc-client-id")
+		// endpoint), so it needs the issuer and client id. The token-file path
+		// also drives the refresh grant. A static id_token is forwarded as-is and
+		// never touches the issuer, so those are optional on that path.
+		if (c.OIDCRefreshToken != "" || c.OIDCRefreshTokenFile != "") && (c.OIDCIssuerURL == "" || c.OIDCClientID == "") {
+			return errors.New("oidc mode with --oidc-refresh-token/--oidc-refresh-token-file requires --oidc-issuer-url and --oidc-client-id")
 		}
 		// When an issuer is set it is the TLS origin the client secret and refresh
 		// token are POSTed to (via discovery), so it must be https and well-formed.

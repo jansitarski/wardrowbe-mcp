@@ -4,11 +4,14 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -68,6 +71,12 @@ type OIDCTokenProvider struct {
 	RefreshToken string
 	// IDToken is a static id_token used when no RefreshToken is configured.
 	IDToken string
+	// RefreshTokenFile, when set, is where the current refresh token is persisted
+	// and reloaded across restarts. IdPs that rotate refresh tokens single-use
+	// (e.g. Cloudflare Access) otherwise invalidate the configured seed after the
+	// first refresh, so a restart would fall back to a dead token. With this set,
+	// each rotation is written here and the latest is loaded on startup.
+	RefreshTokenFile string
 	// TokenEndpoint, when set, is used directly and discovery is skipped. Must
 	// be https (validated in config). Useful for IdPs whose discovery is
 	// unusual, or to pin the endpoint explicitly.
@@ -77,6 +86,7 @@ type OIDCTokenProvider struct {
 	mu            sync.Mutex
 	tokenEndpoint string // cached after first successful discovery
 	refreshToken  string // current grant; replaces RefreshToken when the IdP rotates it
+	loadedFile    bool   // whether RefreshTokenFile has been read once
 }
 
 type oidcDiscovery struct {
@@ -165,7 +175,21 @@ func (o *OIDCTokenProvider) refreshIDToken(ctx context.Context) (string, error) 
 	// Use the most recently issued refresh token: IdPs with rotation enabled
 	// (Auth0, Okta, Keycloak with reuse detection) invalidate the old one on
 	// every grant, so re-POSTing the original would fail the second refresh.
+	// On the first call, seed the in-memory token from RefreshTokenFile (the
+	// token persisted by a previous process) so a restart resumes from the last
+	// rotated token rather than the now-dead configured seed.
 	o.mu.Lock()
+	if o.RefreshTokenFile != "" && !o.loadedFile {
+		o.loadedFile = true
+		if data, err := os.ReadFile(o.RefreshTokenFile); err == nil {
+			if t := strings.TrimSpace(string(data)); t != "" {
+				o.refreshToken = t
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			slog.Warn("oidc: could not read refresh token file; falling back to configured seed",
+				"file", o.RefreshTokenFile, "err", err)
+		}
+	}
 	refreshToken := o.refreshToken
 	o.mu.Unlock()
 	if refreshToken == "" {
@@ -228,19 +252,54 @@ func (o *OIDCTokenProvider) refreshIDToken(ctx context.Context) (string, error) 
 		firstRotation := o.refreshToken == ""
 		o.refreshToken = tok.RefreshToken
 		o.mu.Unlock()
-		if firstRotation {
+		if o.RefreshTokenFile != "" {
+			// Persist the rotation so a restart resumes from it instead of the
+			// dead seed. Best-effort: on failure we still hold it in memory and
+			// keep serving until the next restart.
+			if err := persistRefreshToken(o.RefreshTokenFile, tok.RefreshToken); err != nil {
+				slog.Warn("oidc: failed to persist rotated refresh token; it survives only in memory until restart",
+					"file", o.RefreshTokenFile, "err", err)
+			}
+		} else if firstRotation {
 			// The rotated token lives only in process memory: after a restart the
 			// server resumes from the configured seed token, which a
 			// rotation-enforcing IdP has already invalidated (reuse detection may
 			// even revoke the whole token family). Warn once so the operator knows
-			// to keep the stored token fresh.
+			// to keep the stored token fresh — or set --oidc-refresh-token-file.
 			slog.Warn("oidc: idp rotated the refresh token; the rotation is held in memory only — " +
 				"after a restart the server resumes from the configured refresh token, which the idp " +
-				"may now reject (invalid_grant). If refreshes fail after restarts, mint a fresh token " +
-				"and update MCP_OIDC_REFRESH_TOKEN.")
+				"may now reject (invalid_grant). Set --oidc-refresh-token-file (MCP_OIDC_REFRESH_TOKEN_FILE) " +
+				"to persist rotations across restarts, or re-mint and update MCP_OIDC_REFRESH_TOKEN.")
 		}
 	}
 	return tok.IDToken, nil
+}
+
+// persistRefreshToken atomically writes the current refresh token to path
+// (0600), via a temp file + rename so a crash mid-write can't truncate it.
+func persistRefreshToken(path, token string) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".oidc-refresh-token-*")
+	if err != nil {
+		return fmt.Errorf("create temp: %w", err)
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) // no-op if the rename succeeded
+	if _, err := tmp.WriteString(token); err != nil {
+		tmp.Close()
+		return fmt.Errorf("write temp: %w", err)
+	}
+	if err := tmp.Chmod(0o600); err != nil {
+		tmp.Close()
+		return fmt.Errorf("chmod temp: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close temp: %w", err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return fmt.Errorf("rename: %w", err)
+	}
+	return nil
 }
 
 func (o *OIDCTokenProvider) discoverTokenEndpoint(ctx context.Context) (string, error) {
