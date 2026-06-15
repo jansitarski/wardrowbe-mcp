@@ -110,13 +110,25 @@ func (o *OIDCTokenProvider) SyncPayload(ctx context.Context) (SyncPayload, error
 	if err != nil {
 		return SyncPayload{}, err
 	}
-	if claims.Sub == "" {
+	if strings.TrimSpace(claims.Sub) == "" {
 		return SyncPayload{}, fmt.Errorf("oidc: id_token missing sub claim")
+	}
+	// The backend requires a non-empty display_name, but the `name` claim is
+	// optional and some issuers omit it (e.g. Cloudflare Access id_tokens minted
+	// via the refresh_token grant carry only `sub`). Fall back to email, then
+	// sub (non-blank per the check above), mirroring DevTokenProvider. Trim each
+	// candidate so a whitespace-only claim doesn't slip through as a blank name.
+	display := strings.TrimSpace(claims.Name)
+	if display == "" {
+		display = strings.TrimSpace(claims.Email)
+	}
+	if display == "" {
+		display = claims.Sub
 	}
 	return SyncPayload{
 		ExternalID:  claims.Sub,
 		Email:       claims.Email,
-		DisplayName: claims.Name,
+		DisplayName: display,
 		IDToken:     idToken,
 	}, nil
 }
