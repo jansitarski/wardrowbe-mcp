@@ -28,7 +28,9 @@ func (s *Server) registerWritebackTools() {
 
 	s.add(mcp.NewTool("wardrowbe_set_item_tags",
 		mcp.WithDescription("Set an item's structured attribute tags (PATCH /items/{id} tags). "+
-			"Use after viewing the garment image to record accurate attributes."),
+			"Use after viewing the garment image to record accurate attributes. This replaces the "+
+			"item's full attribute set — include every attribute you want to keep, not just the ones "+
+			"you're changing."),
 		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithIdempotentHintAnnotation(true),
 		mcp.WithString("item_id", mcp.Required(), mcp.Description("Item id.")),
@@ -127,7 +129,20 @@ func (s *Server) handleSetItemTags(ctx context.Context, req mcp.CallToolRequest)
 		return mcp.NewToolResultError("no tag fields provided"), nil
 	}
 
-	raw, err := s.client.UpdateItem(ctx, itemID, wardrowbe.ItemUpdate{Tags: &tags})
+	// Also project colors/primary_color onto the top-level columns. The backend
+	// writes nested tags to the `tags` JSONB only, so without this the first-class
+	// columns stay empty and column-based filters/scoring can't see agent-set
+	// values. (pattern/material/style/formality/season have no column path in
+	// ItemUpdate and remain JSONB-only pending a backend tags→columns sync.)
+	patch := wardrowbe.ItemUpdate{Tags: &tags}
+	if len(tags.Colors) > 0 {
+		patch.Colors = tags.Colors
+	}
+	if tags.PrimaryColor != nil {
+		patch.PrimaryColor = tags.PrimaryColor
+	}
+
+	raw, err := s.client.UpdateItem(ctx, itemID, patch)
 	if err != nil {
 		return toolErr("set item tags failed", err), nil
 	}

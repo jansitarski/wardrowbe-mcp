@@ -30,8 +30,20 @@ func (s *Server) registerItemTools() {
 		mcp.WithString("category", mcp.Description("Filter by item type/category.")),
 		mcp.WithBoolean("is_archived", mcp.Description("Filter by archived state.")),
 		mcp.WithBoolean("needs_wash", mcp.Description("Only items needing a wash.")),
+		mcp.WithString("tagging_status",
+			mcp.Description("Filter by tagging state: pending (needs tags) or tagged."),
+			mcp.Enum("pending", "tagged")),
 		mcp.WithString("search", mcp.Description("Free-text search.")),
 	), s.handleListItems)
+
+	s.add(mcp.NewTool("wardrowbe_list_untagged_items",
+		mcp.WithDescription("List items that still need tagging (shorthand for wardrowbe_list_items "+
+			"with tagging_status=pending). This is the tagging work queue: pair it with "+
+			"wardrowbe_get_item_image + wardrowbe_set_item_tags to clear the backlog."),
+		mcp.WithReadOnlyHintAnnotation(true),
+		mcp.WithInteger("limit", mcp.Description("Max items to return (1-100)."),
+			mcp.DefaultNumber(defaultListPageSize), mcp.Min(1), mcp.Max(100)),
+	), s.handleListUntaggedItems)
 
 	s.add(mcp.NewTool("wardrowbe_get_item",
 		mcp.WithDescription("Get a single wardrobe item by id."),
@@ -76,6 +88,15 @@ func (s *Server) registerItemTools() {
 		mcp.WithIdempotentHintAnnotation(true),
 		mcp.WithString("item_id", mcp.Required(), mcp.Description("Item id.")),
 	), s.handleRestoreItem)
+
+	s.add(mcp.NewTool("wardrowbe_retag_item",
+		mcp.WithDescription("Reset an item to the pending tagging queue, clearing its current tags' "+
+			"origin. Re-queues an item for tagging (by this agent or another). Does not itself run "+
+			"internal AI."),
+		mcp.WithDestructiveHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(true),
+		mcp.WithString("item_id", mcp.Required(), mcp.Description("Item id.")),
+	), s.handleRetagItem)
 }
 
 func (s *Server) handleListItems(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -98,6 +119,9 @@ func (s *Server) handleListItems(ctx context.Context, req mcp.CallToolRequest) (
 	q.Set("page_size", itoa(size))
 	if category := req.GetString("category", ""); category != "" {
 		q.Set("category", category)
+	}
+	if ts := req.GetString("tagging_status", ""); ts != "" {
+		q.Set("tagging_status", ts)
 	}
 	if search := req.GetString("search", ""); search != "" {
 		q.Set("search", search)
@@ -157,6 +181,19 @@ func (s *Server) handleItemsToWash(ctx context.Context, req mcp.CallToolRequest)
 	return jsonText(raw), nil
 }
 
+func (s *Server) handleListUntaggedItems(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	limit, errRes := argIntDefault(req, "limit", defaultListPageSize, 1, 100)
+	if errRes != nil {
+		return errRes, nil
+	}
+	q := url.Values{"tagging_status": {"pending"}, "page_size": {itoa(limit)}}
+	raw, err := s.client.Request(ctx, http.MethodGet, "/items", q, nil)
+	if err != nil {
+		return toolErr("untagged-items fetch failed", err), nil
+	}
+	return jsonText(raw), nil
+}
+
 func (s *Server) handleLogWear(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	itemID, errRes := requireID(req, "item_id")
 	if errRes != nil {
@@ -202,6 +239,14 @@ func (s *Server) handleRestoreItem(ctx context.Context, req mcp.CallToolRequest)
 		return errRes, nil
 	}
 	return s.itemAction(ctx, itemID, "restore", nil)
+}
+
+func (s *Server) handleRetagItem(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	itemID, errRes := requireID(req, "item_id")
+	if errRes != nil {
+		return errRes, nil
+	}
+	return s.itemAction(ctx, itemID, "retag", nil)
 }
 
 // itemAction POSTs /items/{id}/{action} with an optional JSON body.

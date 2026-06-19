@@ -6,6 +6,29 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- Phase 2 external-tagging surface (for deployments where the internal vision
+  model is off and an external agent owns tagging):
+  - `wardrowbe_list_items` gains a `tagging_status` filter (`pending` | `tagged`),
+    forwarded to `GET /items?tagging_status=…`, so the agent can ask "what still
+    needs tagging?".
+  - `wardrowbe_list_untagged_items` — convenience shorthand for the pending work
+    queue (`tagging_status=pending`), mirroring `wardrowbe_get_items_to_wash`.
+  - `wardrowbe_retag_item` — resets an item to the pending tagging queue
+    (`POST /items/{id}/retag`), clearing its current tags' origin.
+  - `auto_tag` boolean on both create tools (`wardrowbe_create_item_from_url`,
+    `wardrowbe_create_item_from_base64`); set `false` to leave a new item pending
+    for external tagging even when backend vision is enabled.
+
+### Changed
+- `wardrowbe_set_item_tags` now also projects `colors`/`primary_color` onto the
+  item's top-level columns (in addition to the `tags` JSONB), so agent-set values
+  are visible to column-based filters and scoring. (`pattern`, `material`,
+  `style`, `formality`, `season` remain JSONB-only pending a backend
+  tags→columns sync.) Its description also now documents the replace semantics:
+  a call replaces the item's full attribute set, so include every attribute you
+  want to keep.
+
 ## [1.0.4] - 2026-06-15
 
 ### Added
