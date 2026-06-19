@@ -1,6 +1,61 @@
 # Phase 2 external-tagging gaps — implementation & test spec
 
-Status: proposed · Scope: `jansitarski/wardrowbe-mcp` (with two backend-coordinated items called out)
+Status: partially shipped · Scope: `jansitarski/wardrowbe-mcp` (with two backend-coordinated items called out)
+
+---
+
+## ⏩ START HERE — current status (updated 2026-06-19, post-implementation)
+
+Most of this spec is **already implemented and deployed**. The detailed sections below
+are kept for reference, but the only remaining MCP work is **Gap 4 (agent attribution)**,
+and its contract **changed** from what the original Gap 4 section proposes — read this banner,
+not just the old section.
+
+| Gap | What it was | Status |
+|---|---|---|
+| 1 — pending work-queue filter | `tagging_status` on `list_items` + `list_untagged_items` | ✅ DONE in MCP commit `98a2014`, verified live |
+| 3 — `auto_tag` on create, `retag_item`, replace-semantics docs | | ✅ DONE in MCP commit `98a2014`, verified live |
+| 2 — populate `colors`/`primary_color` columns | MCP sends them top-level too | ✅ DONE in MCP (`98a2014`) |
+| 2′ — `pattern`/`material`/`style`/`season`/`formality` columns | needed a backend change | ✅ DONE & DEPLOYED on the **backend** (`ItemService.update` now projects every tag attribute onto its column). The MCP's top-level `colors`/`primary_color` send from Gap 2 is now **redundant but harmless** — you may leave it or simplify `set_item_tags` back to a single `tags` payload. |
+| 4 — agent attribution (`tagged_by=agent`) | shared-secret `X-Wardrowbe-Agent-Key` header on `/auth/sync` | ✅ **MCP side DONE** (`--agent-sync-key` / `MCP_AGENT_SYNC_KEY` → header in `doSync`); backend already deployed. **Remaining: set the matching secret on both deployments and roll** (see below). |
+
+### ✅ Gap 4 MCP side — send the agent key header (SHIPPED)
+
+Implemented on the MCP in this PR: `--agent-sync-key` / `MCP_AGENT_SYNC_KEY` (config) →
+`wardrowbe.WithAgentSyncKey(...)` on `NewClient` → `doSync` sets the
+`X-Wardrowbe-Agent-Key` request header when non-empty (header-only, never the body).
+The only remaining step is **deployment** (set the matching secret on both sides).
+
+**The contract changed.** The backend does **not** read an `actor` field from the `/auth/sync`
+body (ignore the body-`actor` design in the old "Gap 4" section). Instead the deployed backend
+mints a signed `actor="agent"` token **only when the sync request carries a shared secret in an
+HTTP header**, constant-time compared against the backend's `AGENT_SYNC_KEY` env var:
+
+- Header name: **`X-Wardrowbe-Agent-Key`**
+- Backend behavior (already live): key present & correct ⇒ token carries `actor=agent` ⇒ that
+  client's writes record `tagged_by=agent`; absent/wrong/`AGENT_SYNC_KEY` unset ⇒ user-scoped.
+
+**Implement on the MCP:**
+1. **Config** (`internal/config/config.go`): add `AgentSyncKey string` from env `MCP_AGENT_SYNC_KEY`
+   (treat as a secret — prefer env, don't log it; mirror how `MCP_API_KEY` is handled).
+2. **Client** (`internal/wardrowbe/client.go`): carry the key on `Client` (add a field; set it via a
+   new param/option on `NewClient`, or a `WithAgentSyncKey(...)` functional option) and, in
+   `doSync`, when non-empty: `req.Header.Set("X-Wardrowbe-Agent-Key", c.agentSyncKey)`. This is the
+   only call that hits `/auth/sync`. **Do not** put the key in `SyncPayload` (the body).
+3. **Wire-up** (`cmd/wardrowbe-mcp/main.go` or wherever `NewClient` is constructed): pass the
+   configured key through.
+4. **Tests** (`internal/wardrowbe/client_test.go`): extend `TestSyncForwardsIDTokenInBody`-style
+   coverage — assert the `X-Wardrowbe-Agent-Key` request header is set when configured and absent
+   when not. Run `make test` (+ `make lint`).
+
+**Deployment (both sides must match):** set the **same** secret as `AGENT_SYNC_KEY` on the backend
+(k8s `wardrowbe` ns) and `MCP_AGENT_SYNC_KEY` on the `wardrowbe-mcp` deployment, then roll both.
+Until both are set, MCP writes correctly stay `tagged_by=user`.
+
+**Verify live:** create a pending item, `set_item_tags`, `get_item` ⇒ `tagged_by` is now `agent`
+(it is `user` today). Archive the throwaway after.
+
+---
 
 ## Context
 

@@ -117,6 +117,7 @@ The most-used ones:
 | `--transport` | `http` | `http` (Streamable) or `stdio`. |
 | `--wardrowbe-url` | — | Backend base URL (no `/api/v1`). **Required.** |
 | `--api-key` | — | Incoming bearer key; **required for http**. Prefer `MCP_API_KEY` env over the flag (argv is visible in `ps`). |
+| `--agent-sync-key` | — | Shared secret sent as `X-Wardrowbe-Agent-Key` on `/auth/sync`; a matching backend then records this client's tag writes as `tagged_by=agent`. Prefer `MCP_AGENT_SYNC_KEY` env. |
 | `--auth` | `dev` | `dev` or `oidc`. |
 | `--external-id` / `--external-email` | — | Dev identity sent to `/auth/sync`. |
 | `--oidc-issuer-url` / `--oidc-client-id` | — | OIDC issuer + client (required with `--oidc-refresh-token`; unused with a static `--oidc-id-token`). |

@@ -19,6 +19,12 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - `auto_tag` boolean on both create tools (`wardrowbe_create_item_from_url`,
     `wardrowbe_create_item_from_base64`); set `false` to leave a new item pending
     for external tagging even when backend vision is enabled.
+- `--agent-sync-key` / `MCP_AGENT_SYNC_KEY`: a shared secret forwarded as the
+  `X-Wardrowbe-Agent-Key` header on `/auth/sync`. A backend with a matching
+  `AGENT_SYNC_KEY` mints an `actor="agent"` token, so this client's tag write-backs
+  record `tagged_by="agent"` instead of `"user"`. The secret rides the header
+  (constant-time compared server-side), never the request body; unset ⇒ writes stay
+  user-scoped. Pairs with the deployed backend agent-attribution change.
 
 ### Changed
 - `wardrowbe_set_item_tags` now also projects `colors`/`primary_color` onto the
