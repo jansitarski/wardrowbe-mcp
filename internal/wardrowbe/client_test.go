@@ -119,69 +119,6 @@ func TestSyncForwardsIDTokenInBody(t *testing.T) {
 	}
 }
 
-func TestSyncSendsAgentKeyHeaderWhenConfigured(t *testing.T) {
-	var gotHeader string
-	var headerPresent bool
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/v1/auth/sync":
-			gotHeader = r.Header.Get("X-Wardrowbe-Agent-Key")
-			_, headerPresent = r.Header["X-Wardrowbe-Agent-Key"]
-			_ = json.NewEncoder(w).Encode(map[string]any{"access_token": "tok", "expires_in": 3600})
-		case "/api/v1/items/abc":
-			_ = json.NewEncoder(w).Encode(map[string]any{"id": "abc"})
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer srv.Close()
-
-	c := NewClient(srv.URL, &fakeProvider{}, srv.Client(), nil, WithAgentSyncKey("s3cr3t"))
-	if _, err := c.Request(context.Background(), http.MethodGet, "/items/abc", nil, nil); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if gotHeader != "s3cr3t" {
-		t.Errorf("X-Wardrowbe-Agent-Key = %q, want s3cr3t", gotHeader)
-	}
-	// The secret must ride the header, never the request body.
-	if !headerPresent {
-		t.Error("X-Wardrowbe-Agent-Key header should be present when configured")
-	}
-}
-
-func TestSyncOmitsAgentKeyHeaderByDefault(t *testing.T) {
-	var headerPresent bool
-	var gotBody map[string]any
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/v1/auth/sync":
-			_, headerPresent = r.Header["X-Wardrowbe-Agent-Key"]
-			_ = json.NewDecoder(r.Body).Decode(&gotBody)
-			_ = json.NewEncoder(w).Encode(map[string]any{"access_token": "tok", "expires_in": 3600})
-		case "/api/v1/items/abc":
-			_ = json.NewEncoder(w).Encode(map[string]any{"id": "abc"})
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer srv.Close()
-
-	c := NewClient(srv.URL, &fakeProvider{}, srv.Client(), nil)
-	if _, err := c.Request(context.Background(), http.MethodGet, "/items/abc", nil, nil); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if headerPresent {
-		t.Error("X-Wardrowbe-Agent-Key header must be absent when not configured")
-	}
-	// And it must never leak into the body under any key.
-	if _, ok := gotBody["actor"]; ok {
-		t.Error("sync body must not carry an actor field (contract is header-only)")
-	}
-	if _, ok := gotBody["agent_key"]; ok {
-		t.Error("sync body must not carry the agent key")
-	}
-}
-
 func TestRequestResyncsOnceOn401(t *testing.T) {
 	var syncCount, itemCalls int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

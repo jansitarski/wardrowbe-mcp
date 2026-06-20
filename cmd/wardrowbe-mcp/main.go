@@ -67,8 +67,7 @@ func run(args []string) error {
 			MaxConnsPerHost:     cfg.MaxConcurrent * 2,
 		},
 	}
-	client := wardrowbe.NewClient(cfg.WardrowbeURL, provider, httpClient, logger,
-		wardrowbe.WithAgentSyncKey(cfg.AgentSyncKey))
+	client := wardrowbe.NewClient(cfg.WardrowbeURL, provider, httpClient, logger)
 	srv := mcpserver.New(cfg, client, logger)
 
 	switch cfg.Transport {

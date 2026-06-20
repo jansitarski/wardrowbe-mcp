@@ -6,10 +6,9 @@ Status: partially shipped · Scope: `jansitarski/wardrowbe-mcp` (with two backen
 
 ## ⏩ START HERE — current status (updated 2026-06-19, post-implementation)
 
-Most of this spec is **already implemented and deployed**. The detailed sections below
-are kept for reference, but the only remaining MCP work is **Gap 4 (agent attribution)**,
-and its contract **changed** from what the original Gap 4 section proposes — read this banner,
-not just the old section.
+Gaps 1, 2, 2′, 3 are **implemented and deployed**. **Gap 4 (agent attribution) was DROPPED**
+from Phase 2 — see the section below; the MCP plumbing added for it should be removed. The
+detailed sections further down are kept for historical reference only.
 
 | Gap | What it was | Status |
 |---|---|---|
@@ -17,43 +16,31 @@ not just the old section.
 | 3 — `auto_tag` on create, `retag_item`, replace-semantics docs | | ✅ DONE in MCP commit `98a2014`, verified live |
 | 2 — populate `colors`/`primary_color` columns | MCP sends them top-level too | ✅ DONE in MCP (`98a2014`) |
 | 2′ — `pattern`/`material`/`style`/`season`/`formality` columns | needed a backend change | ✅ DONE & DEPLOYED on the **backend** (`ItemService.update` now projects every tag attribute onto its column). The MCP's top-level `colors`/`primary_color` send from Gap 2 is now **redundant but harmless** — you may leave it or simplify `set_item_tags` back to a single `tags` payload. |
-| 4 — agent attribution (`tagged_by=agent`) | shared-secret `X-Wardrowbe-Agent-Key` header on `/auth/sync` | ✅ **MCP side DONE** (`--agent-sync-key` / `MCP_AGENT_SYNC_KEY` → header in `doSync`); backend already deployed. **Remaining: set the matching secret on both deployments and roll** (see below). |
+| 4 — agent attribution (`tagged_by=agent`) | shared-secret `X-Wardrowbe-Agent-Key` header on `/auth/sync` | ❌ **DROPPED.** Backend no longer has an `agent` origin (`tagged_by` is `auto|manual`). **Remove the MCP plumbing** added for it — see below. |
 
-### ✅ Gap 4 MCP side — send the agent key header (SHIPPED)
+### ❌ Gap 4 — agent attribution: DROPPED
 
-Implemented on the MCP in this PR: `--agent-sync-key` / `MCP_AGENT_SYNC_KEY` (config) →
-`wardrowbe.WithAgentSyncKey(...)` on `NewClient` → `doSync` sets the
-`X-Wardrowbe-Agent-Key` request header when non-empty (header-only, never the body).
-The only remaining step is **deployment** (set the matching secret on both sides).
+**Decision (2026-06-20):** `tagged_by` keeps only `auto` (internal worker) vs `manual` (any
+human/external client editing via the API). The separate `agent` value was provenance
+granularity no feature consumed, and the unforgeable plumbing it required (a signed JWT
+`actor` claim + an `AGENT_SYNC_KEY` shared secret) was protecting a label nobody reads —
+`tagged_by` grants no authority, so it isn't worth that surface. The backend dropped the
+`agent` enum value, the `actor` claim, and the `AGENT_SYNC_KEY` minting. External-agent
+writes now correctly record `tagged_by=manual`.
 
-**The contract changed.** The backend does **not** read an `actor` field from the `/auth/sync`
-body (ignore the body-`actor` design in the old "Gap 4" section). Instead the deployed backend
-mints a signed `actor="agent"` token **only when the sync request carries a shared secret in an
-HTTP header**, constant-time compared against the backend's `AGENT_SYNC_KEY` env var:
+**MCP cleanup required** (the agent-key plumbing was shipped earlier and is now dead):
+1. **Config** (`internal/config/config.go`): remove `AgentSyncKey` / the `--agent-sync-key`
+   flag and `MCP_AGENT_SYNC_KEY` env.
+2. **Client** (`internal/wardrowbe/client.go`): remove the `agentSyncKey` field, the
+   `WithAgentSyncKey(...)` option, and the `req.Header.Set("X-Wardrowbe-Agent-Key", …)` line
+   in `doSync`.
+3. **Wire-up** (`cmd/wardrowbe-mcp/main.go`): stop passing the key into `NewClient`.
+4. **Tests** (`internal/wardrowbe/client_test.go`): remove the `X-Wardrowbe-Agent-Key`
+   header assertions. Run `make test` (+ `make lint`).
+5. **Deploy config**: drop any `MCP_AGENT_SYNC_KEY` from the `wardrowbe-mcp` deployment.
 
-- Header name: **`X-Wardrowbe-Agent-Key`**
-- Backend behavior (already live): key present & correct ⇒ token carries `actor=agent` ⇒ that
-  client's writes record `tagged_by=agent`; absent/wrong/`AGENT_SYNC_KEY` unset ⇒ user-scoped.
-
-**Implement on the MCP:**
-1. **Config** (`internal/config/config.go`): add `AgentSyncKey string` from env `MCP_AGENT_SYNC_KEY`
-   (treat as a secret — prefer env, don't log it; mirror how `MCP_API_KEY` is handled).
-2. **Client** (`internal/wardrowbe/client.go`): carry the key on `Client` (add a field; set it via a
-   new param/option on `NewClient`, or a `WithAgentSyncKey(...)` functional option) and, in
-   `doSync`, when non-empty: `req.Header.Set("X-Wardrowbe-Agent-Key", c.agentSyncKey)`. This is the
-   only call that hits `/auth/sync`. **Do not** put the key in `SyncPayload` (the body).
-3. **Wire-up** (`cmd/wardrowbe-mcp/main.go` or wherever `NewClient` is constructed): pass the
-   configured key through.
-4. **Tests** (`internal/wardrowbe/client_test.go`): extend `TestSyncForwardsIDTokenInBody`-style
-   coverage — assert the `X-Wardrowbe-Agent-Key` request header is set when configured and absent
-   when not. Run `make test` (+ `make lint`).
-
-**Deployment (both sides must match):** set the **same** secret as `AGENT_SYNC_KEY` on the backend
-(k8s `wardrowbe` ns) and `MCP_AGENT_SYNC_KEY` on the `wardrowbe-mcp` deployment, then roll both.
-Until both are set, MCP writes correctly stay `tagged_by=user`.
-
-**Verify live:** create a pending item, `set_item_tags`, `get_item` ⇒ `tagged_by` is now `agent`
-(it is `user` today). Archive the throwaway after.
+If a future feature ever needs to *trust* write provenance, reintroduce it deliberately
+(the backend enum can regain a value via an additive migration) — don't resurrect it here.
 
 ---
 
@@ -241,46 +228,13 @@ replace-semantics are no longer a surprise.
 
 ---
 
-## Gap 4 — Agent attribution via signed `actor` claim (MCP + BACKEND) — PRIORITY 3
+## Gap 4 — Agent attribution — DROPPED
 
-**Problem.** Every MCP write records `tagged_by="user"`, because the backend mints
-the access token in `POST /auth/sync` via `create_access_token(external_id)` with
-no `actor` claim, and the MCP never requests one. The backend correctly defaults
-an absent claim to `user`; the `agent` value is simply unreachable today.
-
-This is a **coordinated** change — ship the MCP side and the backend side
-together, else the MCP field is inert:
-
-**MCP side** (`internal/wardrowbe/types.go`, `auth.go`, `internal/config`):
-1. Add to `SyncPayload`:
-   ```go
-   Actor string `json:"actor,omitempty"` // "agent" marks this client as a non-human writer
-   ```
-2. Set it from a config switch (default empty ⇒ unchanged behavior). Add an
-   `Actor`/`MCP_ACTOR` flag in `internal/config/config.go` (mirror an existing
-   string flag like `external-id`), validate it ∈ {"", "agent"}, and have
-   `DevTokenProvider`/`OIDCTokenProvider.SyncPayload` copy it into the payload.
-   Most deployments fronting an LLM should set `MCP_ACTOR=agent`.
-
-**Backend side** (track in the `wardrowbe` repo — REQUIRED for the claim to take
-effect): `POST /auth/sync` must read the requested `actor`, and mint
-`create_access_token(external_id, actor="agent")` **only for trusted agent
-clients** — do not blindly trust the body. Options: gate on an agent API key /
-client credential the deployment already holds, or a dedicated agent-sync path.
-The signed claim is then honored by the backend's `get_current_actor`, and writes
-record `tagged_by="agent"`.
-
-**Tests:**
-- MCP: with `MCP_ACTOR=agent`, the `/auth/sync` request body carries
-  `"actor":"agent"` (extend `TestSyncForwardsIDTokenInBody` in
-  `internal/wardrowbe/client_test.go`); default ⇒ no `actor` key.
-- Backend (its repo): trusted agent sync ⇒ token has `actor=agent` ⇒ a tag
-  write-back yields `tagged_by=agent`; untrusted body `actor=agent` ⇒ ignored ⇒
-  `tagged_by=user`.
-
-**Acceptance.** A deployment configured as an agent records `tagged_by=agent`;
-the security property "origin is server-derived, never trusted from the body"
-still holds.
+This gap was **dropped** (2026-06-20). `tagged_by` is `auto|manual` only; there is no
+`agent` origin. The earlier MCP plumbing (`--agent-sync-key` / `MCP_AGENT_SYNC_KEY` →
+`X-Wardrowbe-Agent-Key` header) is now dead and should be removed — see the
+"❌ Gap 4 — agent attribution: DROPPED" cleanup checklist in the banner at the top.
+The original signed-`actor`-claim design is intentionally not reproduced here.
 
 ---
 
@@ -291,12 +245,11 @@ still holds.
 | 1 | `tagging_status` list filter | MCP | — | P1 |
 | 3 | `auto_tag` + `retag` + docs | MCP | — | P2 |
 | 2 | column population (colors/primary_color) | MCP | — | P2 |
-| 2′| pattern/material/style/formality/season columns | backend | backend tags→columns sync | P2 (tracked upstream) |
-| 4 | `actor=agent` attribution | MCP + backend | backend `/auth/sync` minting | P3 |
+| 2′| pattern/material/style/formality/season columns | backend | backend tags→columns sync | ✅ done (backend) |
+| 4 | `actor=agent` attribution | — | — | ❌ dropped |
 
-Gaps 1, 2, 3 are pure MCP and can land in any order / one PR. Gaps 2′ and 4 need
-backend changes — open companion issues on `wardrowbe` and land each pair
-together.
+Gaps 1, 2, 3 are pure MCP and shipped. Gap 2′ was done on the backend. Gap 4 was
+dropped (remove its MCP plumbing per the banner checklist).
 
 ## How to test (general)
 
@@ -309,14 +262,12 @@ together.
 - **Make targets:** `make test` (and `make lint`) before each PR.
 - **Live smoke (homelab, vision off):** create a throwaway item → confirm it lists
   under `tagging_status=pending` (Gap 1) → `set_item_tags` with colors/primary_color
-  → `get_item` shows populated **columns** + JSONB and `tagged_by` per config
-  (Gaps 2/4) → `retag_item` → confirm back to `pending` with origin cleared
+  → `get_item` shows populated **columns** + JSONB (Gaps 2/2′), `tagged_by=manual`
+  → `retag_item` → confirm back to `pending` with origin cleared
   (Gap 3) → `archive_item` to clean up. (This mirrors the 2026-06-19 validation;
   always archive the throwaway afterwards.)
 
 ## Out of scope
 
-- Backend data-model unification (Gap 2′) and `/auth/sync` agent minting (Gap 4
-  backend half) — companion `wardrowbe` issues, referenced above.
 - Changing `set_item_tags` from replace to merge semantics — documenting the
   current contract (Gap 3c) is the minimal fix; a merge mode can follow if needed.

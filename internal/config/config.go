@@ -66,11 +66,6 @@ type Config struct {
 	WardrowbeURL string
 	APIKey       string
 
-	// AgentSyncKey, when set, is forwarded as the X-Wardrowbe-Agent-Key header on
-	// /auth/sync so a matching backend records this client's tag writes as
-	// tagged_by="agent". A shared secret — sourced from env, never logged.
-	AgentSyncKey string
-
 	AuthMode      AuthMode
 	ExternalID    string
 	ExternalEmail string
@@ -136,7 +131,6 @@ func Load(args []string) (Config, error) {
 	// (and into container logs on a crash loop). They get empty defaults here
 	// and fall back to env after parsing, preserving flags-over-env precedence.
 	apiKey := fs.String("api-key", "", "incoming Bearer key (required for http; prefer env MCP_API_KEY)")
-	agentSyncKey := fs.String("agent-sync-key", "", "shared secret sent as X-Wardrowbe-Agent-Key on /auth/sync to record writes as tagged_by=agent (prefer env MCP_AGENT_SYNC_KEY)")
 
 	authMode := fs.String("auth", envOr("MCP_AUTH_MODE", defaultAuthMode), "auth mode: dev or oidc")
 	externalID := fs.String("external-id", envOr("MCP_EXTERNAL_ID", defaultExternalID), "dev identity external_id")
@@ -194,7 +188,6 @@ func Load(args []string) (Config, error) {
 		envKey string
 	}{
 		{apiKey, "MCP_API_KEY"},
-		{agentSyncKey, "MCP_AGENT_SYNC_KEY"},
 		{oidcClientSecret, "MCP_OIDC_CLIENT_SECRET"},
 		{oidcRefreshToken, "MCP_OIDC_REFRESH_TOKEN"},
 		{oidcIDToken, "MCP_OIDC_ID_TOKEN"},
@@ -210,7 +203,6 @@ func Load(args []string) (Config, error) {
 		Port:                 *port,
 		WardrowbeURL:         strings.TrimRight(*wardrowbeURL, "/"),
 		APIKey:               *apiKey,
-		AgentSyncKey:         *agentSyncKey,
 		AuthMode:             AuthMode(strings.ToLower(*authMode)),
 		ExternalID:           *externalID,
 		ExternalEmail:        *externalEmail,

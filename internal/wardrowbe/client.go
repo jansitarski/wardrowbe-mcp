@@ -84,27 +84,10 @@ type Client struct {
 	provider TokenProvider
 	log      *slog.Logger
 
-	// agentSyncKey, when non-empty, is sent as the X-Wardrowbe-Agent-Key header on
-	// /auth/sync. A backend configured with a matching AGENT_SYNC_KEY then mints a
-	// token carrying actor="agent", so this client's tag write-backs record
-	// tagged_by="agent". It is a shared secret: kept out of the request body and
-	// never logged.
-	agentSyncKey string
-
 	mu        sync.Mutex
 	token     string
 	expiresAt time.Time
 	inflight  *syncFlight // non-nil while a token sync is running
-}
-
-// Option customizes a Client at construction.
-type Option func(*Client)
-
-// WithAgentSyncKey sets the shared secret sent as the X-Wardrowbe-Agent-Key header
-// on /auth/sync, opting this client into server-side agent attribution. Empty is a
-// no-op (the header is omitted and writes stay user-scoped).
-func WithAgentSyncKey(key string) Option {
-	return func(c *Client) { c.agentSyncKey = key }
 }
 
 // syncFlight is one in-progress token refresh. token/err are written by the
@@ -117,23 +100,19 @@ type syncFlight struct {
 
 // NewClient builds a Client. httpClient must have sane timeouts configured by
 // the caller; if nil a default with a 60s timeout is used.
-func NewClient(baseURL string, provider TokenProvider, httpClient *http.Client, log *slog.Logger, opts ...Option) *Client {
+func NewClient(baseURL string, provider TokenProvider, httpClient *http.Client, log *slog.Logger) *Client {
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: 60 * time.Second}
 	}
 	if log == nil {
 		log = slog.Default()
 	}
-	c := &Client{
+	return &Client{
 		baseURL:  strings.TrimRight(baseURL, "/"),
 		http:     httpClient,
 		provider: provider,
 		log:      log,
 	}
-	for _, opt := range opts {
-		opt(c)
-	}
-	return c
 }
 
 // ensureToken returns a valid JWT, syncing if the cache is empty or near expiry.
@@ -220,12 +199,6 @@ func (c *Client) doSync(ctx context.Context) (string, time.Time, error) {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
-	// Opt into server-side agent attribution: a backend with a matching
-	// AGENT_SYNC_KEY mints an actor="agent" token for this request. The secret
-	// rides the header (constant-time compared server-side), never the body.
-	if c.agentSyncKey != "" {
-		req.Header.Set("X-Wardrowbe-Agent-Key", c.agentSyncKey)
-	}
 
 	resp, err := c.http.Do(req)
 	if err != nil {
