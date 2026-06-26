@@ -3,7 +3,7 @@ module github.com/jansitarski/wardrowbe-mcp
 go 1.25.11
 
 require (
-	github.com/mark3labs/mcp-go v0.54.1
+	github.com/mark3labs/mcp-go v0.55.1
 	golang.org/x/image v0.41.0
 )
 
