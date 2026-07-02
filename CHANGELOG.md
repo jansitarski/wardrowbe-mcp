@@ -21,13 +21,17 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     for external tagging even when backend vision is enabled.
 
 ### Changed
-- `wardrowbe_set_item_tags` now also projects `colors`/`primary_color` onto the
-  item's top-level columns (in addition to the `tags` JSONB), so agent-set values
-  are visible to column-based filters and scoring. (`pattern`, `material`,
-  `style`, `formality`, `season` remain JSONB-only pending a backend
-  tags→columns sync.) Its description also now documents the replace semantics:
-  a call replaces the item's full attribute set, so include every attribute you
-  want to keep.
+- `wardrowbe_set_item_tags` sends a single `tags` payload; the backend
+  (jansitarski/wardrowbe#2) projects every tag attribute (`colors`,
+  `primary_color`, `pattern`, `material`, `style`, `season`, `formality`) onto
+  its first-class column on write-back, so agent-set values are visible to
+  column-based filters and scoring without any top-level duplication. Its
+  description also now documents the replace semantics: a call replaces the
+  item's full attribute set, so include every attribute you want to keep.
+  The backend additionally requires a write-back to carry content — a call with
+  only empty values leaves the item pending (this tool already rejects
+  attribute-less calls client-side) — and `GET /capabilities` now advertises
+  `features.external_tagging: true` (not yet consumed by this server).
 
 ## [1.0.4] - 2026-06-15
 

@@ -4,19 +4,26 @@ Status: partially shipped · Scope: `jansitarski/wardrowbe-mcp` (with two backen
 
 ---
 
-## ⏩ START HERE — current status (updated 2026-06-19, post-implementation)
+## ⏩ START HERE — current status (updated 2026-07-03, post-implementation)
 
-Gaps 1, 2, 2′, 3 are **implemented and deployed**. **Gap 4 (agent attribution) was DROPPED**
-from Phase 2 — see the section below; the MCP plumbing added for it should be removed. The
-detailed sections further down are kept for historical reference only.
+All gaps are **resolved**: 1, 2/2′, 3 are implemented and live-validated against backend
+`pr2-tagging.4` (the final jansitarski/wardrowbe#2 branch); **Gap 4 (agent attribution) was
+DROPPED** and its MCP plumbing has been removed (`e7aaa16`). The detailed sections further
+down are kept for historical reference only.
 
 | Gap | What it was | Status |
 |---|---|---|
 | 1 — pending work-queue filter | `tagging_status` on `list_items` + `list_untagged_items` | ✅ DONE in MCP commit `98a2014`, verified live |
 | 3 — `auto_tag` on create, `retag_item`, replace-semantics docs | | ✅ DONE in MCP commit `98a2014`, verified live |
-| 2 — populate `colors`/`primary_color` columns | MCP sends them top-level too | ✅ DONE in MCP (`98a2014`) |
-| 2′ — `pattern`/`material`/`style`/`season`/`formality` columns | needed a backend change | ✅ DONE & DEPLOYED on the **backend** (`ItemService.update` now projects every tag attribute onto its column). The MCP's top-level `colors`/`primary_color` send from Gap 2 is now **redundant but harmless** — you may leave it or simplify `set_item_tags` back to a single `tags` payload. |
-| 4 — agent attribution (`tagged_by=agent`) | shared-secret `X-Wardrowbe-Agent-Key` header on `/auth/sync` | ❌ **DROPPED.** Backend no longer has an `agent` origin (`tagged_by` is `auto|manual`). **Remove the MCP plumbing** added for it — see below. |
+| 2 / 2′ — tag attributes visible to column-based filters | backend projects every tag attribute onto its column on write-back | ✅ DONE on the **backend** (`ItemService.update`); the MCP's interim top-level `colors`/`primary_color` send (Gap 2 workaround) has been **removed** — `set_item_tags` sends a single `tags` payload again. Live-verified: all attribute columns populate. |
+| 4 — agent attribution (`tagged_by=agent`) | shared-secret `X-Wardrowbe-Agent-Key` header on `/auth/sync` | ❌ **DROPPED.** Backend has no `agent` origin (`tagged_by` is `auto|manual`); the MCP plumbing was removed in `e7aaa16`. |
+
+Backend behaviors added late in wardrowbe#2 that this server relies on or tolerates:
+a write-back must carry content (empty/null-only PATCH leaves the item `pending`; this
+server already rejects attribute-less `set_item_tags` calls client-side), and
+`GET /capabilities` now advertises `features.external_tagging: true` (informational —
+this server does not yet consume `/capabilities`; candidate for the Phase 3 companion
+work, gating suggestion/pairing tools on `external_suggestions`/`external_pairings`).
 
 ### ❌ Gap 4 — agent attribution: DROPPED
 
