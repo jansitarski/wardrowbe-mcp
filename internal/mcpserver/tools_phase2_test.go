@@ -95,65 +95,39 @@ func TestListUntaggedItemsHardSetsPending(t *testing.T) {
 	}
 }
 
-// Gap 2 — set_item_tags projects colors/primary_color onto the top-level columns
-// in addition to the tags JSONB; JSONB-only attributes do not claim a column.
-func TestSetItemTagsPopulatesColumns(t *testing.T) {
-	t.Run("colors and primary_color hit columns and JSONB", func(t *testing.T) {
-		var cap capturedRequest
-		s := newRecordingServer(t, &cap, map[string]any{"id": "item-1"})
-		_, err := s.handleSetItemTags(context.Background(), toolReq(map[string]any{
-			"item_id":       "item-1",
-			"colors":        []any{"navy", "white"},
-			"primary_color": "navy",
-		}))
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
+// set_item_tags sends a single tags payload; the backend projects tag attributes
+// onto their first-class columns on write-back, so nothing is sent top-level.
+func TestSetItemTagsSendsSingleTagsPayload(t *testing.T) {
+	var cap capturedRequest
+	s := newRecordingServer(t, &cap, map[string]any{"id": "item-1"})
+	_, err := s.handleSetItemTags(context.Background(), toolReq(map[string]any{
+		"item_id":       "item-1",
+		"colors":        []any{"navy", "white"},
+		"primary_color": "navy",
+		"pattern":       "striped",
+	}))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(cap.body, &raw); err != nil {
+		t.Fatalf("decode body %q: %v", cap.body, err)
+	}
+	tags, _ := raw["tags"].(map[string]any)
+	if tags == nil {
+		t.Fatalf("tags payload missing: %s", cap.body)
+	}
+	if tags["primary_color"] != "navy" || tags["pattern"] != "striped" {
+		t.Errorf("tags not populated: %v", tags)
+	}
+	if colors, _ := tags["colors"].([]any); len(colors) != 2 {
+		t.Errorf("tags.colors = %v, want 2 entries", tags["colors"])
+	}
+	for _, col := range []string{"colors", "primary_color", "pattern"} {
+		if _, ok := raw[col]; ok {
+			t.Errorf("%s must not be sent top-level; the backend projects columns from tags", col)
 		}
-		var body struct {
-			Colors       []string `json:"colors"`
-			PrimaryColor string   `json:"primary_color"`
-			Tags         struct {
-				Colors       []string `json:"colors"`
-				PrimaryColor string   `json:"primary_color"`
-			} `json:"tags"`
-		}
-		if err := json.Unmarshal(cap.body, &body); err != nil {
-			t.Fatalf("decode body %q: %v", cap.body, err)
-		}
-		if len(body.Colors) != 2 || body.Colors[0] != "navy" {
-			t.Errorf("top-level colors = %v, want [navy white]", body.Colors)
-		}
-		if body.PrimaryColor != "navy" {
-			t.Errorf("top-level primary_color = %q, want navy", body.PrimaryColor)
-		}
-		if len(body.Tags.Colors) != 2 || body.Tags.PrimaryColor != "navy" {
-			t.Errorf("tags JSONB not populated: %+v", body.Tags)
-		}
-	})
-
-	t.Run("pattern stays JSONB-only, no column claim", func(t *testing.T) {
-		var cap capturedRequest
-		s := newRecordingServer(t, &cap, map[string]any{"id": "item-1"})
-		_, err := s.handleSetItemTags(context.Background(), toolReq(map[string]any{
-			"item_id": "item-1",
-			"pattern": "striped",
-		}))
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		var raw map[string]any
-		if err := json.Unmarshal(cap.body, &raw); err != nil {
-			t.Fatalf("decode body %q: %v", cap.body, err)
-		}
-		tags, _ := raw["tags"].(map[string]any)
-		if tags["pattern"] != "striped" {
-			t.Errorf("tags.pattern = %v, want striped", tags["pattern"])
-		}
-		// pattern has no first-class column path — it must not appear top-level.
-		if _, ok := raw["pattern"]; ok {
-			t.Error("pattern must not be sent as a top-level column (JSONB-only residual)")
-		}
-	})
+	}
 }
 
 // Gap 3a — auto_tag=false is forwarded as a multipart form field on create.

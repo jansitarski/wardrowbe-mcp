@@ -129,18 +129,9 @@ func (s *Server) handleSetItemTags(ctx context.Context, req mcp.CallToolRequest)
 		return mcp.NewToolResultError("no tag fields provided"), nil
 	}
 
-	// Also project colors/primary_color onto the top-level columns. The backend
-	// writes nested tags to the `tags` JSONB only, so without this the first-class
-	// columns stay empty and column-based filters/scoring can't see agent-set
-	// values. (pattern/material/style/formality/season have no column path in
-	// ItemUpdate and remain JSONB-only pending a backend tags→columns sync.)
+	// The backend projects every tag attribute onto its first-class column on
+	// write-back (fit stays JSONB-only), so a single tags payload is sufficient.
 	patch := wardrowbe.ItemUpdate{Tags: &tags}
-	if len(tags.Colors) > 0 {
-		patch.Colors = tags.Colors
-	}
-	if tags.PrimaryColor != nil {
-		patch.PrimaryColor = tags.PrimaryColor
-	}
 
 	raw, err := s.client.UpdateItem(ctx, itemID, patch)
 	if err != nil {
