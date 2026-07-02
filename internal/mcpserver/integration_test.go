@@ -30,7 +30,7 @@ import (
 const tinyPNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M8AAAMBAQDJ/pLvAAAAAElFTkSuQmCC"
 
 // expectedToolCount must track the number of tools registered by registerTools.
-const expectedToolCount = 33
+const expectedToolCount = 35
 
 func mockBackend(t *testing.T) *httptest.Server {
 	t.Helper()
@@ -264,9 +264,12 @@ func TestToolsHappyPath(t *testing.T) {
 		{name: "wardrowbe_list_notification_settings"},
 		{name: "wardrowbe_test_notification", args: map[string]any{"setting_id": "setting-1"}},
 		{name: "wardrowbe_list_items", args: map[string]any{"page": 1, "page_size": 10, "category": "shirt", "search": "blue"}},
+		{name: "wardrowbe_list_items", args: map[string]any{"tagging_status": "pending"}},
 		{name: "wardrowbe_list_items"}, // zero-arg call must work (default page_size applies)
+		{name: "wardrowbe_list_untagged_items", args: map[string]any{"limit": 5}},
 		{name: "wardrowbe_get_item", args: map[string]any{"item_id": "item-1"}},
 		{name: "wardrowbe_get_items_to_wash", args: map[string]any{"limit": 5}},
+		{name: "wardrowbe_retag_item", args: map[string]any{"item_id": "item-1"}},
 		{name: "wardrowbe_log_wear", args: map[string]any{"item_id": "item-1", "date": "2026-06-01"}},
 		{name: "wardrowbe_log_wash", args: map[string]any{"item_id": "item-1"}},
 		{name: "wardrowbe_archive_item", args: map[string]any{"item_id": "item-1", "reason": "worn out"}},
@@ -287,7 +290,7 @@ func TestToolsHappyPath(t *testing.T) {
 		{name: "wardrowbe_update_item", args: map[string]any{"item_id": "item-1", "name": "New", "primary_color": "navy", "colors": []any{"navy", "white"}, "wash_interval": 3, "favorite": true}},
 		{name: "wardrowbe_set_item_tags", args: map[string]any{"item_id": "item-1", "colors": []any{"blue"}, "pattern": "solid", "material": "cotton", "style": []any{"smart-casual"}, "season": []any{"summer"}, "formality": "casual", "fit": "slim"}},
 		{name: "wardrowbe_set_item_description", args: map[string]any{"item_id": "item-1", "description": "A nice blue shirt"}},
-		{name: "wardrowbe_create_item_from_base64", args: map[string]any{"image_base64": tinyPNG, "filename": "shirt.png", "name": "Uploaded", "type": "shirt"}},
+		{name: "wardrowbe_create_item_from_base64", args: map[string]any{"image_base64": tinyPNG, "filename": "shirt.png", "name": "Uploaded", "type": "shirt", "auto_tag": false}},
 	}
 
 	for _, tt := range cases {

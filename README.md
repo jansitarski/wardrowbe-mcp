@@ -25,9 +25,10 @@ Code. Current version: **1.0.0**.
 
 ## Tools
 
-33 tools covering the wardrobe API, all prefixed `wardrowbe_` so they stay unambiguous
+35 tools covering the wardrobe API, all prefixed `wardrowbe_` so they stay unambiguous
 in MCP hosts that aggregate several servers: browsing and analytics
 (`wardrowbe_list_items`, `wardrowbe_get_item`, `wardrowbe_get_wardrobe_summary`, …),
+the external-tagging queue (`wardrowbe_list_untagged_items`, `wardrowbe_retag_item`),
 wear/wash/archive lifecycle, outfit suggestion and feedback, the image-view tools
 (`wardrowbe_get_item_image`, `wardrowbe_get_outfit_images`, `wardrowbe_download_image`), write-back
 (`wardrowbe_update_item`, `wardrowbe_set_item_tags`, `wardrowbe_set_item_description`),

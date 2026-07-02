@@ -28,7 +28,9 @@ func (s *Server) registerWritebackTools() {
 
 	s.add(mcp.NewTool("wardrowbe_set_item_tags",
 		mcp.WithDescription("Set an item's structured attribute tags (PATCH /items/{id} tags). "+
-			"Use after viewing the garment image to record accurate attributes."),
+			"Use after viewing the garment image to record accurate attributes. This replaces the "+
+			"item's full attribute set — include every attribute you want to keep, not just the ones "+
+			"you're changing."),
 		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithIdempotentHintAnnotation(true),
 		mcp.WithString("item_id", mcp.Required(), mcp.Description("Item id.")),
@@ -127,7 +129,11 @@ func (s *Server) handleSetItemTags(ctx context.Context, req mcp.CallToolRequest)
 		return mcp.NewToolResultError("no tag fields provided"), nil
 	}
 
-	raw, err := s.client.UpdateItem(ctx, itemID, wardrowbe.ItemUpdate{Tags: &tags})
+	// The backend projects every tag attribute onto its first-class column on
+	// write-back (fit stays JSONB-only), so a single tags payload is sufficient.
+	patch := wardrowbe.ItemUpdate{Tags: &tags}
+
+	raw, err := s.client.UpdateItem(ctx, itemID, patch)
 	if err != nil {
 		return toolErr("set item tags failed", err), nil
 	}

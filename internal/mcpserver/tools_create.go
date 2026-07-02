@@ -57,6 +57,9 @@ func (s *Server) registerCreateTools() {
 		mcp.WithString("notes", mcp.Description("Optional free-text notes/description.")),
 		mcp.WithString("primary_color", mcp.Description("Optional primary color.")),
 		mcp.WithBoolean("favorite", mcp.Description("Mark as favorite. Default false.")),
+		mcp.WithBoolean("auto_tag", mcp.Description("Whether the backend auto-tags the new item. "+
+			"Defaults to true. Set false to leave the item pending for external tagging. Only "+
+			"meaningful when backend vision is enabled; with vision off every create defers anyway.")),
 	), s.handleCreateItemFromURL)
 
 	s.add(mcp.NewTool("wardrowbe_create_item_from_base64",
@@ -78,6 +81,9 @@ func (s *Server) registerCreateTools() {
 		mcp.WithString("notes", mcp.Description("Optional free-text notes/description.")),
 		mcp.WithString("primary_color", mcp.Description("Optional primary color.")),
 		mcp.WithBoolean("favorite", mcp.Description("Mark as favorite. Default false.")),
+		mcp.WithBoolean("auto_tag", mcp.Description("Whether the backend auto-tags the new item. "+
+			"Defaults to true. Set false to leave the item pending for external tagging. Only "+
+			"meaningful when backend vision is enabled; with vision off every create defers anyway.")),
 	), s.handleCreateItemFromBase64)
 }
 
@@ -146,6 +152,11 @@ func itemFields(req mcp.CallToolRequest) (map[string]string, *mcp.CallToolResult
 		return nil, errRes
 	} else if present {
 		fields["favorite"] = boolStr(fav)
+	}
+	if at, present, errRes := argBool(req, "auto_tag"); errRes != nil {
+		return nil, errRes
+	} else if present {
+		fields["auto_tag"] = boolStr(at)
 	}
 	return fields, nil
 }
