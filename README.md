@@ -47,8 +47,8 @@ Each tool maps to a Wardrowbe backend endpoint; the definitions live in
 | `POST /mcp` | Bearer | The MCP endpoint (Streamable HTTP). |
 
 `/mcp` is hardened for public exposure: a static bearer gate (constant-time, emits
-RFC 9728 `WWW-Authenticate` on `401`), an inbound body-size cap, a concurrency
-limiter that returns `503 Retry-After` when saturated, and panic recovery. Backend
+RFC 9728 `WWW-Authenticate` on `401`), an inbound body-size cap, and panic
+recovery. Backend
 error bodies are logged server-side only — never surfaced to the caller. Wire a k8s
 `readinessProbe` to `/readyz` and `livenessProbe` to `/`.
 
@@ -124,7 +124,6 @@ The most-used ones:
 | `--oidc-refresh-token-file` | — | Persists+reloads the rotated refresh token across restarts (see below). |
 | `--oidc-id-token` | — | Static `id_token` used when no refresh token is configured. |
 | `--oidc-token-endpoint` | — | Optional https token-endpoint override (skips OIDC discovery). |
-| `--max-concurrent` | `16` | In-flight `/mcp` request cap. |
 | `--max-body-mb` | `40` | Inbound `/mcp` body cap. |
 | `--portal-resource-url` | — | Emits the RFC 9728 `resource_metadata` on `401`. |
 
@@ -154,7 +153,6 @@ echoed in `--help` output or flag-error usage text.
 |---|---|---|
 | `401 Unauthorized` on `/mcp` | Missing/incorrect bearer | Send `Authorization: Bearer $MCP_API_KEY`; confirm the value matches `--api-key`/`MCP_API_KEY`. |
 | `503` on `/readyz` | Backend unreachable | Check `--wardrowbe-url` and that the backend is up; `/readyz` pings it. `/` (liveness) stays `200` regardless. |
-| `503` with `Retry-After` on `/mcp` | Concurrency cap hit | Raise `--max-concurrent`; the limiter sheds load instead of queuing. |
 | `413` / request rejected | Body exceeds cap | Raise `--max-body-mb` (default 40) for large base64 uploads. |
 | `wardrowbe_create_item_from_url` refuses a URL | SSRF guard / non-public host | The URL must be `http(s)` and resolve to a public IP; private/loopback/link-local/multicast/NAT64 targets are blocked. |
 | OIDC refresh fails with `invalid_grant` | Refresh token expired/rotated out | Issue a fresh refresh token. The server follows rotation automatically while running, but the rotated token is held in memory only — after a restart it resumes from the configured token, which a rotation-enforcing IdP may have invalidated. Re-issue and update `MCP_OIDC_REFRESH_TOKEN` whenever this happens; with such IdPs also run a single replica (a shared refresh token across replicas trips reuse detection). |

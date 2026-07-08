@@ -103,7 +103,6 @@ kubectl -n wardrowbe create secret generic wardrowbe-mcp-oidc \
 | `config.externalId` | `""` | Dev identity sent to `/auth/sync`. |
 | `config.externalEmail` | `""` | Real email sent in dev `/auth/sync`. |
 | `config.portalResourceUrl` | `""` | Emits RFC 9728 `resource_metadata` on `401`. |
-| `config.maxConcurrent` | `""` | In-flight `/mcp` cap (empty → binary default 16). |
 | `config.maxBodyMb` | `""` | Inbound `/mcp` body cap MB (empty → default 40). |
 | `config.extraArgs` | `[]` | Additional raw flags. |
 | `oidc.issuerUrl` | `""` | OIDC issuer URL (flag; `config.auth=oidc`). |

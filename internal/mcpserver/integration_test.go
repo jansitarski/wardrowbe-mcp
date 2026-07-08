@@ -177,7 +177,7 @@ func newTestClient(t *testing.T, backendURL string, opts ...func(*Server)) *clie
 	cfg := config.Config{
 		Transport: config.TransportStdio, AuthMode: config.AuthDev,
 		WardrowbeURL: backendURL, ExternalID: "test-user", ExternalEmail: "t@example.com",
-		ImageVariant: config.VariantMedium, ImageMaxDim: 768, MaxConcurrent: 16,
+		ImageVariant: config.VariantMedium, ImageMaxDim: 768,
 	}
 	provider := wardrowbe.DevTokenProvider{ExternalID: cfg.ExternalID, Email: cfg.ExternalEmail}
 	wc := wardrowbe.NewClient(backendURL, provider, &http.Client{Timeout: 10 * time.Second}, slog.Default())

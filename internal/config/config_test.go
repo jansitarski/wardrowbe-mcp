@@ -16,7 +16,7 @@ var allEnvKeys = []string{
 	"MCP_OIDC_ISSUER_URL", "MCP_OIDC_CLIENT_ID", "MCP_OIDC_TOKEN_ENDPOINT",
 	"MCP_OIDC_CLIENT_SECRET", "MCP_OIDC_REFRESH_TOKEN", "MCP_OIDC_REFRESH_TOKEN_FILE",
 	"MCP_LOG_LEVEL", "MCP_IMAGE_MAX_DIM", "MCP_IMAGE_VARIANT",
-	"MCP_PORTAL_RESOURCE_URL", "MCP_MAX_CONCURRENT", "MCP_MAX_BODY_MB",
+	"MCP_PORTAL_RESOURCE_URL", "MCP_MAX_BODY_MB",
 }
 
 // clearEnv blanks every config env var for the duration of the test (envOr
@@ -52,10 +52,10 @@ func TestWardrowbeURLRequired(t *testing.T) {
 func TestInvalidIntEnvRejected(t *testing.T) {
 	clearEnv(t)
 	t.Setenv("MCP_API_KEY", "k")
-	t.Setenv("MCP_MAX_CONCURRENT", "not-a-number")
+	t.Setenv("MCP_MAX_BODY_MB", "not-a-number")
 	_, err := Load(baseArgs("--transport", "http"))
 	if err == nil {
-		t.Fatal("expected error for non-integer MCP_MAX_CONCURRENT")
+		t.Fatal("expected error for non-integer MCP_MAX_BODY_MB")
 	}
 }
 

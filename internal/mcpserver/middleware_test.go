@@ -19,7 +19,6 @@ func testServer(t *testing.T, portalURL string) *Server {
 		ImageVariant:      config.VariantMedium,
 		ImageMaxDim:       768,
 		PortalResourceURL: portalURL,
-		MaxConcurrent:     4,
 		MaxBodyBytes:      40 << 20,
 	}
 	client := wardrowbe.NewClient("http://unused", wardrowbe.DevTokenProvider{ExternalID: "x"}, nil, slog.Default())
@@ -62,34 +61,6 @@ func TestMCPWithWrongBearerReturns401(t *testing.T) {
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401", rec.Code)
 	}
-}
-
-func TestConcurrencyLimitReturns503WhenSaturated(t *testing.T) {
-	srv := testServer(t, "")
-	srv.sem = make(chan struct{}, 1) // cap 1 for a deterministic test
-
-	release := make(chan struct{})
-	entered := make(chan struct{})
-	blocking := srv.limitConcurrency(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		close(entered)
-		<-release
-		w.WriteHeader(http.StatusOK)
-	}))
-
-	// Occupy the only slot.
-	go blocking.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/mcp", nil))
-	<-entered
-
-	// Second request must be rejected immediately with 503.
-	rec := httptest.NewRecorder()
-	blocking.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/mcp", nil))
-	if rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("saturated status = %d, want 503", rec.Code)
-	}
-	if rec.Header().Get("Retry-After") == "" {
-		t.Error("expected Retry-After header on 503")
-	}
-	close(release)
 }
 
 func TestReadyzReturns503WhenBackendUnreachable(t *testing.T) {

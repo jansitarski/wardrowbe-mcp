@@ -33,6 +33,16 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   attribute-less calls client-side) — and `GET /capabilities` now advertises
   `features.external_tagging: true` (not yet consumed by this server).
 
+### Removed
+- The `/mcp` concurrency limiter and its `--max-concurrent` / `MCP_MAX_CONCURRENT`
+  knob (and the chart's `config.maxConcurrent` value). The limiter counted every
+  in-flight request — including the long-lived SSE streams the Streamable HTTP
+  transport holds open — so a single user with a few reconnecting sessions could
+  exhaust the 16 slots and get spurious `503 server at capacity` responses. For
+  a single-user deployment the cap causes more harm than the OOM pile-up it
+  guarded against; backend connections remain bounded by the HTTP transport's
+  per-host connection ceiling.
+
 ## [1.0.4] - 2026-06-15
 
 ### Added

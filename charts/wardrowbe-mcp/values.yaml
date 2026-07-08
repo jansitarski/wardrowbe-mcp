@@ -33,9 +33,7 @@ config:
   # Emits the RFC 9728 resource_metadata on a 401 (for a Cloudflare Access MCP
   # portal). Leave empty to disable.
   portalResourceUrl: ""
-  # In-flight /mcp request cap and inbound /mcp body cap (MB). Empty => the
-  # binary's own defaults (16 / 40).
-  maxConcurrent: ""
+  # Inbound /mcp body cap (MB). Empty => the binary's own default (40).
   maxBodyMb: ""
   # Any additional raw flags, e.g. ["--oidc-issuer=https://..."].
   extraArgs: []

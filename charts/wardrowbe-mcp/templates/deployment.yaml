@@ -96,9 +96,6 @@ spec:
             {{- with .Values.config.portalResourceUrl }}
             - {{ printf "--portal-resource-url=%s" (toString .) | quote }}
             {{- end }}
-            {{- with .Values.config.maxConcurrent }}
-            - {{ printf "--max-concurrent=%v" . | quote }}
-            {{- end }}
             {{- with .Values.config.maxBodyMb }}
             - {{ printf "--max-body-mb=%v" . | quote }}
             {{- end }}

@@ -59,12 +59,12 @@ func run(args []string) error {
 			IdleConnTimeout:       90 * time.Second,
 			ExpectContinueTimeout: 1 * time.Second,
 			// All traffic targets one backend host; Go's default of 2 idle
-			// conns/host would defeat keep-alive under concurrency. Size the
-			// pool to the request concurrency cap and ceiling total conns so a
-			// stalled backend can't accumulate unbounded connections.
+			// conns/host would defeat keep-alive under concurrency. Ceiling
+			// total conns so a stalled backend can't accumulate unbounded
+			// connections.
 			MaxIdleConns:        100,
-			MaxIdleConnsPerHost: cfg.MaxConcurrent,
-			MaxConnsPerHost:     cfg.MaxConcurrent * 2,
+			MaxIdleConnsPerHost: 16,
+			MaxConnsPerHost:     32,
 		},
 	}
 	client := wardrowbe.NewClient(cfg.WardrowbeURL, provider, httpClient, logger)

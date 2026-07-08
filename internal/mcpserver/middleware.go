@@ -29,9 +29,9 @@ const readyCacheTTL = 1 * time.Second
 //   - GET  /readyz  readiness (bounded backend ping)
 //   - POST /mcp     bearer-gated Streamable HTTP MCP endpoint
 //
-// The /mcp handler is wrapped with an inbound body-size cap and a concurrency
-// limiter; the whole mux is wrapped with panic recovery so a panic in any layer
-// returns a clean 500 instead of a dropped connection.
+// The /mcp handler is wrapped with an inbound body-size cap; the whole mux is
+// wrapped with panic recovery so a panic in any layer returns a clean 500
+// instead of a dropped connection.
 func (s *Server) HTTPHandler() http.Handler {
 	streamable := server.NewStreamableHTTPServer(
 		s.mcp,
@@ -40,7 +40,6 @@ func (s *Server) HTTPHandler() http.Handler {
 
 	mcpHandler := s.bearerGate(streamable)
 	mcpHandler = http.MaxBytesHandler(mcpHandler, s.cfg.MaxBodyBytes)
-	mcpHandler = s.limitConcurrency(mcpHandler)
 
 	mux := http.NewServeMux()
 	mux.Handle(mcpPath, mcpHandler)
@@ -105,23 +104,6 @@ func (s *Server) readiness() error {
 	s.readyChecked = time.Now()
 	s.readyErr = err
 	return err
-}
-
-// limitConcurrency caps in-flight /mcp requests via a buffered semaphore,
-// returning 503 immediately when the server is saturated rather than queuing
-// unboundedly (which, with slow backend calls, would pile up to OOM).
-func (s *Server) limitConcurrency(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		select {
-		case s.sem <- struct{}{}:
-			defer func() { <-s.sem }()
-			next.ServeHTTP(w, r)
-		default:
-			s.log.Warn("at capacity, rejecting request", "limit", cap(s.sem))
-			w.Header().Set("Retry-After", "5")
-			writeJSON(w, http.StatusServiceUnavailable, `{"error":"server at capacity"}`)
-		}
-	})
 }
 
 // recoverPanic turns a panic in any handler/middleware into a logged 500 rather

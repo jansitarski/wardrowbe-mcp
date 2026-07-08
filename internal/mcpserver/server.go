@@ -37,8 +37,6 @@ type Server struct {
 	// apiKeyHash is the SHA-256 of cfg.APIKey, precomputed once so the
 	// per-request bearer comparison doesn't re-hash the configured key.
 	apiKeyHash [32]byte
-	// sem bounds concurrent /mcp requests (buffered to cfg.MaxConcurrent).
-	sem chan struct{}
 	// imageTransport builds the HTTP transport for external image fetches.
 	// Production uses the SSRF-guarded transport; tests inject a plain one to
 	// reach a loopback test server. Injecting it here (rather than a package-level
@@ -73,7 +71,6 @@ func New(cfg config.Config, client *wardrowbe.Client, log *slog.Logger) *Server 
 		log:            log,
 		mcp:            mcpSrv,
 		apiKeyHash:     sha256.Sum256([]byte(cfg.APIKey)),
-		sem:            make(chan struct{}, cfg.MaxConcurrent),
 		imageTransport: ssrfTransport,
 	}
 	s.registerTools()
