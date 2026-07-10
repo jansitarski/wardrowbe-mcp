@@ -388,6 +388,18 @@ func (c *Client) CreateStudioOutfit(ctx context.Context, outfit StudioOutfit) (j
 	return c.Request(ctx, http.MethodPost, "/outfits/studio", nil, outfit)
 }
 
+// CreateSuggestion persists an agent-authored outfit suggestion
+// (POST /outfits/suggestions) and returns the raw created outfit payload.
+func (c *Client) CreateSuggestion(ctx context.Context, suggestion AuthoredSuggestion) (json.RawMessage, error) {
+	return c.Request(ctx, http.MethodPost, "/outfits/suggestions", nil, suggestion)
+}
+
+// CreatePairing persists an agent-authored pairing for a source item
+// (POST /pairings/item/{id}) and returns the raw created pairing payload.
+func (c *Client) CreatePairing(ctx context.Context, itemID string, pairing AuthoredPairing) (json.RawMessage, error) {
+	return c.Request(ctx, http.MethodPost, "/pairings/item/"+url.PathEscape(itemID), nil, pairing)
+}
+
 // CreateItemFromImage uploads image bytes plus optional metadata as
 // multipart/form-data to POST /items and returns the raw created item. The
 // backend stores the image and queues AI auto-tagging.

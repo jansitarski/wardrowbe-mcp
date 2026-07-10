@@ -30,7 +30,7 @@ import (
 const tinyPNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M8AAAMBAQDJ/pLvAAAAAElFTkSuQmCC"
 
 // expectedToolCount must track the number of tools registered by registerTools.
-const expectedToolCount = 35
+const expectedToolCount = 37
 
 func mockBackend(t *testing.T) *httptest.Server {
 	t.Helper()
