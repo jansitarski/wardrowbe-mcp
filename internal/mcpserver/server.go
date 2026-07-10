@@ -94,6 +94,7 @@ func (s *Server) registerTools() {
 	s.registerMiscTools()      // health, auth, session, analytics, notifications
 	s.registerItemTools()      // list/get items, wear/wash/archive/restore
 	s.registerOutfitTools()    // suggest, get, recent, accept/reject/skip, feedback
+	s.registerAuthoringTools() // create_outfit_suggestion, create_item_pairing (source=external)
 	s.registerImageTools()     // get_item_image, get_outfit_images
 	s.registerWritebackTools() // update_item, set_item_tags, set_item_description
 	s.registerCreateTools()    // create_item_from_url, create_item_from_base64

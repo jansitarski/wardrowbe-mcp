@@ -165,8 +165,22 @@ var validTimesOfDay = map[string]struct{}{
 	"morning": {}, "afternoon": {}, "evening": {}, "night": {}, "full day": {},
 }
 
+// validSeasons / validFormalities mirror the backend's canonical item-tag
+// vocabulary. The authoring endpoints accept free-form strings, but the tool
+// layer pins the canonical values so authored outfits stay filterable.
+var validSeasons = map[string]struct{}{
+	"spring": {}, "summer": {}, "fall": {}, "winter": {}, "all-season": {},
+}
+
+var validFormalities = map[string]struct{}{
+	"very-casual": {}, "casual": {}, "smart-casual": {}, "business-casual": {},
+	"formal": {}, "very-formal": {},
+}
+
 func occasionList() []string  { return sortedKeys(validOccasions) }
 func timeOfDayList() []string { return sortedKeys(validTimesOfDay) }
+func seasonList() []string    { return sortedKeys(validSeasons) }
+func formalityList() []string { return sortedKeys(validFormalities) }
 
 func sortedKeys(m map[string]struct{}) []string {
 	out := make([]string, 0, len(m))

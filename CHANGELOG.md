@@ -7,6 +7,19 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- Phase 3 external outfit-authoring surface (jansitarski/wardrowbe#3 — for
+  deployments where the internal text model is off and an external agent owns
+  suggestions and pairings; rows land as `Outfit(source=external)`):
+  - `wardrowbe_create_outfit_suggestion` — persist an agent-authored outfit
+    suggestion (`POST /outfits/suggestions`); it stays pending for the user to
+    accept or reject, unlike `wardrowbe_create_outfit` which records a
+    committed outfit.
+  - `wardrowbe_create_item_pairing` — persist an agent-authored pairing built
+    around a source item (`POST /pairings/item/{id}`); it appears alongside
+    generated pairings on the item's pairings surface.
+  - Both tools (and `wardrowbe_create_outfit`) accept the new descriptive
+    attributes `season`, `formality`, `palette`, and `notes`; season/formality
+    are pinned to the canonical item-tag vocabulary at the tool layer.
 - Phase 2 external-tagging surface (for deployments where the internal vision
   model is off and an external agent owns tagging):
   - `wardrowbe_list_items` gains a `tagging_status` filter (`pending` | `tagged`),

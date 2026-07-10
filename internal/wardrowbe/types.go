@@ -41,6 +41,41 @@ type StudioOutfit struct {
 	ScheduledFor *string  `json:"scheduled_for,omitempty"` // YYYY-MM-DD
 	MarkWorn     bool     `json:"mark_worn"`
 	SourceItemID *string  `json:"source_item_id,omitempty"`
+	OutfitAttributes
+}
+
+// OutfitAttributes are the optional descriptive attributes an outfit author can
+// record (jansitarski/wardrowbe#3). Free-form on the backend, but the tool layer
+// restricts season/formality to the canonical item-tag vocabulary.
+type OutfitAttributes struct {
+	Season    *string  `json:"season,omitempty"`
+	Formality *string  `json:"formality,omitempty"`
+	Palette   []string `json:"palette,omitempty"` // dominant colors, most prominent first (max 10)
+	Notes     *string  `json:"notes,omitempty"`
+}
+
+// AuthoredSuggestion is the POST /outfits/suggestions body — an outfit
+// suggestion authored by the agent, persisted as Outfit(source=external) and
+// left pending for the user to accept or reject.
+type AuthoredSuggestion struct {
+	Items        []string `json:"items"`    // 1-20 item ids; positions follow this order
+	Occasion     string   `json:"occasion"` // validated against the occasion enum (see helpers.go)
+	Name         *string  `json:"name,omitempty"`
+	ScheduledFor *string  `json:"scheduled_for,omitempty"` // YYYY-MM-DD; backend defaults to the user's today
+	Reasoning    *string  `json:"reasoning,omitempty"`
+	StyleNotes   *string  `json:"style_notes,omitempty"`
+	OutfitAttributes
+}
+
+// AuthoredPairing is the POST /pairings/item/{id} body — a pairing authored by
+// the agent around a source item, persisted as Outfit(source=external). The
+// backend prepends the source item when it is absent from Items.
+type AuthoredPairing struct {
+	Items        []string `json:"items"`                   // partner item ids, 1-20
+	ScheduledFor *string  `json:"scheduled_for,omitempty"` // YYYY-MM-DD; backend defaults to the user's today
+	Reasoning    *string  `json:"reasoning,omitempty"`
+	StyleNotes   *string  `json:"style_notes,omitempty"`
+	OutfitAttributes
 }
 
 // ItemUpdate is the PATCH /items/{id} body. All fields optional — pointers and

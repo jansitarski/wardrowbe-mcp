@@ -22,7 +22,9 @@ func (s *Server) registerOutfitTools() {
 	s.add(mcp.NewTool("wardrowbe_suggest_outfit",
 		mcp.WithDescription("Ask the in-cluster model to generate an outfit suggestion. NOTE: that "+
 			"model is intentionally weak — prefer composing the outfit yourself (use wardrowbe_list_items + "+
-			"wardrowbe_get_item_image to see garments) and persisting it with wardrowbe_create_outfit."),
+			"wardrowbe_get_item_image to see garments) and persisting it with "+
+			"wardrowbe_create_outfit_suggestion (a pending proposal) or wardrowbe_create_outfit "+
+			"(a committed outfit)."),
 		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithString("occasion", mcp.Description("Occasion."), mcp.Enum(occasionList()...)),
 		mcp.WithString("time_of_day", mcp.Description("Time of day."), mcp.Enum(timeOfDayList()...)),
@@ -30,12 +32,12 @@ func (s *Server) registerOutfitTools() {
 		mcp.WithString("notes", mcp.Description("Free-text styling notes/constraints.")),
 	), s.handleSuggestOutfit)
 
-	s.add(mcp.NewTool("wardrowbe_create_outfit",
-		mcp.WithDescription("Persist an outfit YOU composed, directly from explicit item ids "+
-			"(POST /outfits/studio). Use this — not wardrowbe_suggest_outfit — when you have chosen the "+
-			"garments yourself: it saves your pick to Wardrowbe without delegating to the weak "+
-			"in-cluster model. Provide 1-20 item ids (from wardrowbe_list_items / wardrowbe_get_item / "+
-			"wardrowbe_get_item_image)."),
+	createOutfitOpts := []mcp.ToolOption{
+		mcp.WithDescription("Persist an outfit YOU composed, directly from explicit item ids " +
+			"(POST /outfits/studio). Use this — not wardrowbe_suggest_outfit — when the user has " +
+			"chosen to keep the outfit: it records a committed outfit. To merely propose one for " +
+			"the user to accept or reject, use wardrowbe_create_outfit_suggestion. Provide 1-20 " +
+			"item ids (from wardrowbe_list_items / wardrowbe_get_item / wardrowbe_get_item_image)."),
 		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithArray("item_ids", mcp.Required(),
 			mcp.Description("Chosen item ids, 1-20."), mcp.WithStringItems(), mcp.MinItems(1), mcp.MaxItems(maxOutfitItems)),
@@ -45,7 +47,9 @@ func (s *Server) registerOutfitTools() {
 		mcp.WithString("scheduled_for", mcp.Description("Optional date to schedule it for, YYYY-MM-DD.")),
 		mcp.WithBoolean("mark_worn", mcp.Description("Also mark the outfit (and its items) worn now. Default false.")),
 		mcp.WithString("source_item_id", mcp.Description("Optional seed item id this outfit was built around.")),
-	), s.handleCreateOutfit)
+	}
+	s.add(mcp.NewTool("wardrowbe_create_outfit",
+		append(createOutfitOpts, authoringAttributeOptions()...)...), s.handleCreateOutfit)
 
 	s.add(mcp.NewTool("wardrowbe_get_latest_outfit",
 		mcp.WithDescription("Get the most recent outfit."),
@@ -195,6 +199,11 @@ func (s *Server) handleCreateOutfit(ctx context.Context, req mcp.CallToolRequest
 	if sid := req.GetString("source_item_id", ""); sid != "" {
 		outfit.SourceItemID = &sid
 	}
+	attrs, errRes := authoringAttributes(req)
+	if errRes != nil {
+		return errRes, nil
+	}
+	outfit.OutfitAttributes = attrs
 
 	raw, err := s.client.CreateStudioOutfit(ctx, outfit)
 	if err != nil {
