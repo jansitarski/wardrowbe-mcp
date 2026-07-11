@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"strconv"
 
 	"github.com/mark3labs/mcp-go/mcp"
 )
@@ -56,6 +57,105 @@ func (s *Server) registerMiscTools() {
 		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithString("setting_id", mcp.Required(), mcp.Description("Notification setting id.")),
 	), s.handleTestNotification)
+
+	s.add(mcp.NewTool("wardrowbe_get_capabilities",
+		mcp.WithDescription("Backend capability flags (GET /capabilities): whether the internal AI "+
+			"capabilities are active (ai.vision, ai.text) and which external write surfaces exist "+
+			"(features.external_tagging/suggestions/pairings). Check this to decide whether YOU own "+
+			"tagging, suggestions and pairings (author them via the wardrowbe_create_* and "+
+			"wardrowbe_set_item_tags tools) or the in-cluster model does."),
+		mcp.WithReadOnlyHintAnnotation(true),
+	), s.simpleGet("/capabilities"))
+
+	s.add(mcp.NewTool("wardrowbe_get_preferences",
+		mcp.WithDescription("The user's styling preferences (GET /users/me/preferences): favorite and "+
+			"avoided colors, style profile, default occasion, temperature sensitivity, layering and "+
+			"variety settings, excluded items. Read these before authoring outfits so suggestions "+
+			"respect the user's constraints."),
+		mcp.WithReadOnlyHintAnnotation(true),
+	), s.simpleGet("/users/me/preferences"))
+
+	s.add(mcp.NewTool("wardrowbe_get_learning_insights",
+		mcp.WithDescription("The learned feedback profile (GET /learning): color/style scores, best "+
+			"item pairs and active insights derived from outfit feedback history. Useful signal for "+
+			"authoring suggestions and pairings the user is likely to accept."),
+		mcp.WithReadOnlyHintAnnotation(true),
+	), s.simpleGet("/learning"))
+
+	s.add(mcp.NewTool("wardrowbe_get_item_pair_suggestions",
+		mcp.WithDescription("Items that historically pair well with a given item "+
+			"(GET /learning/item-pairs/{id}), based on positive outfit feedback. Good input for "+
+			"wardrowbe_create_item_pairing."),
+		mcp.WithReadOnlyHintAnnotation(true),
+		mcp.WithString("item_id", mcp.Required(), mcp.Description("Item id.")),
+		mcp.WithInteger("limit", mcp.Description("Max pairs (1-20)."),
+			mcp.DefaultNumber(5), mcp.Min(1), mcp.Max(20)),
+	), s.handleItemPairSuggestions)
+
+	s.add(mcp.NewTool("wardrowbe_get_weather",
+		mcp.WithDescription("Current weather at the user's configured location (GET /weather/current). "+
+			"The internal generator conditions outfits on weather — do the same when authoring "+
+			"suggestions. Pass latitude/longitude only to override the stored location."),
+		mcp.WithReadOnlyHintAnnotation(true),
+		mcp.WithNumber("latitude", mcp.Description("Optional latitude override."), mcp.Min(-90), mcp.Max(90)),
+		mcp.WithNumber("longitude", mcp.Description("Optional longitude override."), mcp.Min(-180), mcp.Max(180)),
+	), s.handleWeather("/weather/current", false))
+
+	s.add(mcp.NewTool("wardrowbe_get_weather_forecast",
+		mcp.WithDescription("Daily weather forecast (GET /weather/forecast) — for planning outfits "+
+			"ahead (pair with scheduled_for on the authoring tools)."),
+		mcp.WithReadOnlyHintAnnotation(true),
+		mcp.WithNumber("latitude", mcp.Description("Optional latitude override."), mcp.Min(-90), mcp.Max(90)),
+		mcp.WithNumber("longitude", mcp.Description("Optional longitude override."), mcp.Min(-180), mcp.Max(180)),
+		mcp.WithInteger("days", mcp.Description("Days ahead (1-16)."),
+			mcp.DefaultNumber(7), mcp.Min(1), mcp.Max(16)),
+	), s.handleWeather("/weather/forecast", true))
+}
+
+// handleWeather serves both weather endpoints; withDays adds the forecast's
+// days parameter.
+func (s *Server) handleWeather(path string, withDays bool) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		q := url.Values{}
+		for _, key := range []string{"latitude", "longitude"} {
+			v, present, errRes := argFloat(req, key)
+			if errRes != nil {
+				return errRes, nil
+			}
+			if present {
+				q.Set(key, strconv.FormatFloat(v, 'f', -1, 64))
+			}
+		}
+		if withDays {
+			days, errRes := argIntDefault(req, "days", 7, 1, 16)
+			if errRes != nil {
+				return errRes, nil
+			}
+			q.Set("days", itoa(days))
+		}
+		raw, err := s.client.Request(ctx, http.MethodGet, path, q, nil)
+		if err != nil {
+			return toolErr("weather fetch failed", err), nil
+		}
+		return jsonText(raw), nil
+	}
+}
+
+func (s *Server) handleItemPairSuggestions(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	itemID, errRes := requireID(req, "item_id")
+	if errRes != nil {
+		return errRes, nil
+	}
+	limit, errRes := argIntDefault(req, "limit", 5, 1, 20)
+	if errRes != nil {
+		return errRes, nil
+	}
+	path := "/learning/item-pairs/" + url.PathEscape(itemID)
+	raw, err := s.client.Request(ctx, http.MethodGet, path, url.Values{"limit": {itoa(limit)}}, nil)
+	if err != nil {
+		return toolErr("item pair suggestions fetch failed", err), nil
+	}
+	return jsonText(raw), nil
 }
 
 func (s *Server) handleHealth(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
