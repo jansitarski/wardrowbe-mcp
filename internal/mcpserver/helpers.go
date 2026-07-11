@@ -103,6 +103,29 @@ func argInt(req mcp.CallToolRequest, key string) (val int, present bool, errRes 
 	}
 }
 
+// argFloat reads an optional numeric argument strictly, rejecting present but
+// uncoercible values (e.g. latitude:"north") instead of silently defaulting.
+func argFloat(req mcp.CallToolRequest, key string) (val float64, present bool, errRes *mcp.CallToolResult) {
+	raw, ok := req.GetArguments()[key]
+	if !ok {
+		return 0, false, nil
+	}
+	switch v := raw.(type) {
+	case float64:
+		return v, true, nil
+	case int:
+		return float64(v), true, nil
+	case json.Number:
+		f, err := v.Float64()
+		if err != nil {
+			return 0, true, mcp.NewToolResultErrorf("%s must be a number", key)
+		}
+		return f, true, nil
+	default:
+		return 0, true, mcp.NewToolResultErrorf("%s must be a number", key)
+	}
+}
+
 // safeErrText renders an error for return to the MCP caller without leaking
 // backend internals. An *APIError already reports only method/path/status; any
 // other error (network, TLS, DNS — which embed internal hostnames/IPs) is
@@ -126,10 +149,10 @@ func toolErr(summary string, err error) *mcp.CallToolResult {
 }
 
 // firstOutfitID fetches the id of the latest outfit, or an error if there are
-// none. limit=1 keeps the backend from serializing the whole outfit list just
-// to read one id.
+// none. page_size=1 keeps the backend from serializing a whole page of outfits
+// just to read one id (the backend paginates with page_size, not limit).
 func (s *Server) firstOutfitID(ctx context.Context) (string, error) {
-	raw, err := s.client.Request(ctx, http.MethodGet, "/outfits", url.Values{"limit": {"1"}}, nil)
+	raw, err := s.client.Request(ctx, http.MethodGet, "/outfits", url.Values{"page_size": {"1"}}, nil)
 	if err != nil {
 		return "", err
 	}

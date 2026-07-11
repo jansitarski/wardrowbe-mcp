@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -17,6 +18,14 @@ import (
 var validOutfitStatuses = map[string]struct{}{
 	"pending": {}, "accepted": {}, "rejected": {}, "skipped": {},
 }
+
+// validOutfitSources mirrors the backend's outfit_source enum for the
+// get_recent_outfits filter.
+var validOutfitSources = map[string]struct{}{
+	"scheduled": {}, "on_demand": {}, "manual": {}, "pairing": {}, "external": {},
+}
+
+func outfitSourceList() []string { return sortedKeys(validOutfitSources) }
 
 func (s *Server) registerOutfitTools() {
 	s.add(mcp.NewTool("wardrowbe_suggest_outfit",
@@ -72,12 +81,22 @@ func (s *Server) registerOutfitTools() {
 	), s.handleDeleteOutfit)
 
 	s.add(mcp.NewTool("wardrowbe_get_recent_outfits",
-		mcp.WithDescription("List recent outfits, optionally filtered by status."),
+		mcp.WithDescription("List recent outfits (GET /outfits), newest first, with optional "+
+			"filters — e.g. source=external for outfits you authored, or is_lookbook=true for "+
+			"saved templates."),
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithInteger("limit", mcp.Description("Max outfits (1-20)."),
 			mcp.DefaultNumber(10), mcp.Min(1), mcp.Max(20)),
 		mcp.WithString("status", mcp.Description("Filter by status."),
 			mcp.Enum("pending", "accepted", "rejected", "skipped")),
+		mcp.WithString("source", mcp.Description("Filter by how the outfit was created."),
+			mcp.Enum(outfitSourceList()...)),
+		mcp.WithString("occasion", mcp.Description("Filter by occasion."), mcp.Enum(occasionList()...)),
+		mcp.WithString("date_from", mcp.Description("Only outfits scheduled on/after this date, YYYY-MM-DD.")),
+		mcp.WithString("date_to", mcp.Description("Only outfits scheduled on/before this date, YYYY-MM-DD.")),
+		mcp.WithBoolean("is_lookbook",
+			mcp.Description("true: only lookbook templates (undated); false: only dated outfits.")),
+		mcp.WithString("search", mcp.Description("Search outfit names (max 50 chars)."), mcp.MaxLength(50)),
 	), s.handleRecentOutfits)
 
 	s.add(mcp.NewTool("wardrowbe_accept_latest_outfit",
@@ -256,12 +275,45 @@ func (s *Server) handleRecentOutfits(ctx context.Context, req mcp.CallToolReques
 	if errRes != nil {
 		return errRes, nil
 	}
-	q := url.Values{"limit": {itoa(limit)}}
+	// The backend paginates with page_size; a bare "limit" param is ignored.
+	q := url.Values{"page_size": {itoa(limit)}}
 	if status := req.GetString("status", ""); status != "" {
 		if _, ok := validOutfitStatuses[status]; !ok {
 			return mcp.NewToolResultErrorf("invalid status %q (want pending, accepted, rejected or skipped)", status), nil
 		}
 		q.Set("status", status)
+	}
+	if source := req.GetString("source", ""); source != "" {
+		if _, ok := validOutfitSources[source]; !ok {
+			return mcp.NewToolResultErrorf("invalid source %q (must be one of: %s)",
+				source, strings.Join(outfitSourceList(), ", ")), nil
+		}
+		q.Set("source", source)
+	}
+	if occasion := req.GetString("occasion", ""); occasion != "" {
+		if _, ok := validOccasions[occasion]; !ok {
+			return mcp.NewToolResultErrorf("invalid occasion %q", occasion), nil
+		}
+		q.Set("occasion", occasion)
+	}
+	for _, key := range []string{"date_from", "date_to"} {
+		if d := req.GetString(key, ""); d != "" {
+			if !isValidDate(d) {
+				return mcp.NewToolResultErrorf("%s must be YYYY-MM-DD", key), nil
+			}
+			q.Set(key, d)
+		}
+	}
+	if isLookbook, present, errRes := argBool(req, "is_lookbook"); errRes != nil {
+		return errRes, nil
+	} else if present {
+		q.Set("is_lookbook", strconv.FormatBool(isLookbook))
+	}
+	if search := req.GetString("search", ""); search != "" {
+		if utf8.RuneCountInString(search) > 50 {
+			return mcp.NewToolResultError("search must be 50 characters or less"), nil
+		}
+		q.Set("search", search)
 	}
 	raw, err := s.client.Request(ctx, http.MethodGet, "/outfits", q, nil)
 	if err != nil {

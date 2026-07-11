@@ -7,6 +7,22 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- Authoring-context read surface — the inputs the internal generator uses,
+  exposed so an authoring agent can use them too:
+  - `wardrowbe_get_capabilities` — the backend's `/capabilities` flags, so the
+    agent can tell which surfaces it owns before acting.
+  - `wardrowbe_get_weather` / `wardrowbe_get_weather_forecast` — current
+    conditions and the daily forecast at the user's location (coordinates
+    overridable), for weather-aware suggestions and `scheduled_for` planning.
+  - `wardrowbe_get_preferences` — color favorites/avoids, style profile,
+    default occasion, temperature sensitivity, layering/variety settings.
+  - `wardrowbe_get_learning_insights` / `wardrowbe_get_item_pair_suggestions` —
+    the learned feedback profile and per-item pair affinities.
+  - `wardrowbe_list_pairings` — the read side of pairings (collection or
+    per-item), to check what exists before authoring more.
+- `wardrowbe_get_recent_outfits` gains `source`, `occasion`, `date_from`,
+  `date_to`, `is_lookbook` and `search` filters (e.g. `source=external` lists
+  the agent's own creations).
 - Phase 3 external outfit-authoring surface (jansitarski/wardrowbe#3 — for
   deployments where the internal text model is off and an external agent owns
   suggestions and pairings; rows land as `Outfit(source=external)`):
@@ -45,6 +61,12 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   only empty values leaves the item pending (this tool already rejects
   attribute-less calls client-side) — and `GET /capabilities` now advertises
   `features.external_tagging: true` (not yet consumed by this server).
+
+### Fixed
+- `wardrowbe_get_recent_outfits` and the latest-outfit resolution sent a
+  `limit` query parameter, which the backend ignores (it paginates with
+  `page_size`) — `limit` therefore never had any effect and every call
+  returned the default 20 outfits. Now mapped to `page_size`.
 
 ### Removed
 - The `/mcp` concurrency limiter and its `--max-concurrent` / `MCP_MAX_CONCURRENT`
