@@ -6,38 +6,9 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Security
-- Bumped the Go toolchain to 1.25.12 (go.mod, CI, release, Docker base image):
-  1.25.11's `crypto/tls` carries a known vulnerability that govulncheck flags
-  on every CI run (the `security` job had been failing on master since the
-  advisory landed). No code changes.
-
-### Fixed
-- Intermittent `MCP server connection lost` errors from the claude.ai connector
-  (typically on the first call after idle or one of two concurrent calls, with
-  an immediate retry succeeding). Three transport-lifecycle changes:
-  - The Streamable HTTP server now sends a heartbeat every 25s on any standing
-    GET (listening) stream, so intermediaries that kill quiet streamed
-    responses (Cloudflare drops them after ~100s without bytes) no longer
-    silently sever the connection the client discovers dead on its next call.
-  - The server runs **stateless** by default (`--stateless` / `MCP_STATELESS`,
-    default `true`): every POST is self-contained and no session id is issued.
-    Sessions previously lived in pod memory, so any restart invalidated the
-    session the connector still held and its next call failed. All tools are
-    plain request/response, so statelessness costs nothing; set
-    `--stateless=false` to restore the old behavior.
-  - Removed the http.Server `WriteTimeout` (was 6m): it spans the entire
-    response lifetime, so it hard-killed even actively heartbeating streams at
-    exactly that mark. Handler work stays bounded by the backend client's
-    5-minute timeout.
+## [1.1.0] - 2026-07-15
 
 ### Added
-- `compact` boolean on `wardrowbe_get_recent_outfits`: returns a slim
-  projection (outfit id/name/status/occasion/scheduled_for/created_at, items as
-  id/type/name, plus total/has_more) instead of full outfit objects, which
-  embed every item with signed image URLs and run to ~85k chars at limit 20.
-  Use it for dedupe/overview checks; fetch details per outfit with
-  `wardrowbe_get_outfit`.
 - Phase 2 external-tagging surface (for deployments where the internal vision
   model is off and an external agent owns tagging):
   - `wardrowbe_list_items` gains a `tagging_status` filter (`pending` | `tagged`),
@@ -50,6 +21,15 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - `auto_tag` boolean on both create tools (`wardrowbe_create_item_from_url`,
     `wardrowbe_create_item_from_base64`); set `false` to leave a new item pending
     for external tagging even when backend vision is enabled.
+- `compact` boolean on `wardrowbe_get_recent_outfits`: returns a slim
+  projection (outfit id/name/status/occasion/scheduled_for/created_at, items as
+  id/type/name, plus total/has_more) instead of full outfit objects, which
+  embed every item with signed image URLs and run to ~85k chars at limit 20.
+  Use it for dedupe/overview checks; fetch details per outfit with
+  `wardrowbe_get_outfit`.
+- `--stateless` / `MCP_STATELESS` (default `true`): the Streamable HTTP
+  transport now runs stateless by default — every POST is self-contained and
+  no session id is issued. Set `false` to restore stateful sessions.
 
 ### Changed
 - `wardrowbe_set_item_tags` sends a single `tags` payload; the backend
@@ -64,6 +44,22 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   attribute-less calls client-side) — and `GET /capabilities` now advertises
   `features.external_tagging: true` (not yet consumed by this server).
 
+### Fixed
+- Intermittent `MCP server connection lost` errors from the claude.ai connector
+  (typically on the first call after idle or one of two concurrent calls, with
+  an immediate retry succeeding). Three transport-lifecycle changes:
+  - The Streamable HTTP server now sends a heartbeat every 25s on any standing
+    GET (listening) stream, so intermediaries that kill quiet streamed
+    responses (Cloudflare drops them after ~100s without bytes) no longer
+    silently sever the connection the client discovers dead on its next call.
+  - The server runs **stateless** by default (see `--stateless` above): every
+    POST is self-contained, so a pod restart can no longer invalidate a
+    session the connector still holds.
+  - Removed the http.Server `WriteTimeout` (was 6m): it spans the entire
+    response lifetime, so it hard-killed even actively heartbeating streams at
+    exactly that mark. Handler work stays bounded by the backend client's
+    5-minute timeout.
+
 ### Removed
 - The `/mcp` concurrency limiter and its `--max-concurrent` / `MCP_MAX_CONCURRENT`
   knob (and the chart's `config.maxConcurrent` value). The limiter counted every
@@ -73,6 +69,11 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   a single-user deployment the cap causes more harm than the OOM pile-up it
   guarded against; backend connections remain bounded by the HTTP transport's
   per-host connection ceiling.
+
+### Security
+- Bumped the Go toolchain to 1.25.12 (go.mod, CI, release, Docker base image):
+  1.25.11's `crypto/tls` carries a known vulnerability, fixed in 1.25.12. No
+  code changes.
 
 ## [1.0.4] - 2026-06-15
 
