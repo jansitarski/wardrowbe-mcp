@@ -6,6 +6,25 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- Intermittent `MCP server connection lost` errors from the claude.ai connector
+  (typically on the first call after idle or one of two concurrent calls, with
+  an immediate retry succeeding). Three transport-lifecycle changes:
+  - The Streamable HTTP server now sends a heartbeat every 25s on any standing
+    GET (listening) stream, so intermediaries that kill quiet streamed
+    responses (Cloudflare drops them after ~100s without bytes) no longer
+    silently sever the connection the client discovers dead on its next call.
+  - The server runs **stateless** by default (`--stateless` / `MCP_STATELESS`,
+    default `true`): every POST is self-contained and no session id is issued.
+    Sessions previously lived in pod memory, so any restart invalidated the
+    session the connector still held and its next call failed. All tools are
+    plain request/response, so statelessness costs nothing; set
+    `--stateless=false` to restore the old behavior.
+  - Removed the http.Server `WriteTimeout` (was 6m): it spans the entire
+    response lifetime, so it hard-killed even actively heartbeating streams at
+    exactly that mark. Handler work stays bounded by the backend client's
+    5-minute timeout.
+
 ### Added
 - Phase 2 external-tagging surface (for deployments where the internal vision
   model is off and an external agent owns tagging):

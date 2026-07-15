@@ -16,7 +16,7 @@ var allEnvKeys = []string{
 	"MCP_OIDC_ISSUER_URL", "MCP_OIDC_CLIENT_ID", "MCP_OIDC_TOKEN_ENDPOINT",
 	"MCP_OIDC_CLIENT_SECRET", "MCP_OIDC_REFRESH_TOKEN", "MCP_OIDC_REFRESH_TOKEN_FILE",
 	"MCP_LOG_LEVEL", "MCP_IMAGE_MAX_DIM", "MCP_IMAGE_VARIANT",
-	"MCP_PORTAL_RESOURCE_URL", "MCP_MAX_BODY_MB",
+	"MCP_PORTAL_RESOURCE_URL", "MCP_MAX_BODY_MB", "MCP_STATELESS",
 }
 
 // clearEnv blanks every config env var for the duration of the test (envOr
@@ -69,6 +69,64 @@ func TestInvalidIntEnvIgnoredWhenFlagOverrides(t *testing.T) {
 	}
 	if cfg.Port != 8080 {
 		t.Errorf("got port %d, want 8080", cfg.Port)
+	}
+}
+
+func TestStatelessDefaultsTrue(t *testing.T) {
+	clearEnv(t)
+	cfg, err := Load(baseArgs("--api-key", "k"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !cfg.Stateless {
+		t.Error("Stateless should default to true")
+	}
+}
+
+func TestStatelessEnvDisables(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("MCP_STATELESS", "false")
+	cfg, err := Load(baseArgs("--api-key", "k"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Stateless {
+		t.Error("MCP_STATELESS=false should disable stateless mode")
+	}
+}
+
+func TestStatelessFlagOverridesEnv(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("MCP_STATELESS", "false")
+	cfg, err := Load(baseArgs("--api-key", "k", "--stateless=true"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !cfg.Stateless {
+		t.Error("--stateless=true should override MCP_STATELESS=false")
+	}
+}
+
+func TestInvalidBoolEnvRejected(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("MCP_API_KEY", "k")
+	t.Setenv("MCP_STATELESS", "yes-please")
+	_, err := Load(baseArgs())
+	if err == nil {
+		t.Fatal("expected error for non-boolean MCP_STATELESS")
+	}
+}
+
+func TestInvalidBoolEnvIgnoredWhenFlagOverrides(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("MCP_API_KEY", "k")
+	t.Setenv("MCP_STATELESS", "yes-please") // malformed, but overridden by --stateless
+	cfg, err := Load(baseArgs("--stateless=false"))
+	if err != nil {
+		t.Fatalf("flag overrides the bad env var, so Load should succeed: %v", err)
+	}
+	if cfg.Stateless {
+		t.Error("explicit --stateless=false should win")
 	}
 }
 

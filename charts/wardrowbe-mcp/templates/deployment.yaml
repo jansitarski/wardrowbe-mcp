@@ -99,6 +99,9 @@ spec:
             {{- with .Values.config.maxBodyMb }}
             - {{ printf "--max-body-mb=%v" . | quote }}
             {{- end }}
+            {{- with .Values.config.stateless }}
+            - {{ printf "--stateless=%v" . | quote }}
+            {{- end }}
             {{- range .Values.config.extraArgs }}
             - {{ . | quote }}
             {{- end }}

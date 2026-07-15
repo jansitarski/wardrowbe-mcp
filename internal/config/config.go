@@ -86,6 +86,14 @@ type Config struct {
 	// MaxBodyBytes caps the inbound /mcp request body.
 	MaxBodyBytes int64
 
+	// Stateless disables server-side MCP session tracking: every POST is
+	// self-contained and no session id is issued. Sessions otherwise live in
+	// pod memory, so any restart invalidates whatever session the connector
+	// still holds and its next call fails with "connection lost". All tools
+	// are plain request/response, so statelessness costs nothing; the flag
+	// exists as a rollback lever, not because stateful is better.
+	Stateless bool
+
 	// ShowVersion is set by --version; when true the caller should print the
 	// version and exit instead of starting the server. The rest of the Config is
 	// not validated in that case.
@@ -114,6 +122,18 @@ func Load(args []string) (Config, error) {
 			return fallback
 		}
 		return n
+	}
+	envOrBool := func(flagName, key string, fallback bool) bool {
+		v, ok := os.LookupEnv(key)
+		if !ok || v == "" {
+			return fallback
+		}
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			envErrs = append(envErrs, envErr{flagName, fmt.Sprintf("%s=%q (not a boolean)", key, v)})
+			return fallback
+		}
+		return b
 	}
 
 	transport := fs.String("transport", envOr("MCP_TRANSPORT", defaultTransport), "transport: http or stdio")
@@ -149,6 +169,8 @@ func Load(args []string) (Config, error) {
 
 	maxBodyMB := fs.Int("max-body-mb", envOrInt("max-body-mb", "MCP_MAX_BODY_MB", defaultMaxBodyMB), "max inbound /mcp request body in MiB")
 
+	stateless := fs.Bool("stateless", envOrBool("stateless", "MCP_STATELESS", true), "stateless Streamable HTTP mode: no server-side MCP sessions (set false to restore stateful sessions)")
+
 	showVersion := fs.Bool("version", false, "print version and exit")
 
 	if err := fs.Parse(args); err != nil {
@@ -174,7 +196,7 @@ func Load(args []string) (Config, error) {
 		}
 	}
 	if len(fatalEnvErrs) > 0 {
-		return Config{}, fmt.Errorf("invalid integer environment variable(s): %s", strings.Join(fatalEnvErrs, ", "))
+		return Config{}, fmt.Errorf("invalid environment variable(s): %s", strings.Join(fatalEnvErrs, ", "))
 	}
 
 	// Apply env fallbacks for the secret flags that intentionally have no
@@ -214,6 +236,7 @@ func Load(args []string) (Config, error) {
 		ImageVariant:         ImageVariant(strings.ToLower(*imageVariant)),
 		PortalResourceURL:    *portalResourceURL,
 		MaxBodyBytes:         int64(*maxBodyMB) << 20,
+		Stateless:            *stateless,
 	}
 
 	if cfg.ExternalEmail == "" {
