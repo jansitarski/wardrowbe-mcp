@@ -5,7 +5,7 @@
 # compile step needs no QEMU — only the final image layer is per-platform.
 # Base images are pinned by digest (the tag is kept for readability); Dependabot
 # bumps the digest when the tag moves.
-FROM --platform=$BUILDPLATFORM golang:1.25.12@sha256:9669c2ed28435af1b8989acb9fd5235346a912016cc8b152b694a9a91dced0a6 AS build
+FROM --platform=$BUILDPLATFORM golang:1.26.5@sha256:d52df9c279840adf958d017ebb275651ed8338b953d39817bc3633a2e6b1bbcc AS build
 ARG TARGETOS
 ARG TARGETARCH
 ARG VERSION=dev
