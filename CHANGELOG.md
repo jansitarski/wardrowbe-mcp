@@ -6,7 +6,7 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [1.1.0] - 2026-07-15
+## [1.1.0] - 2026-07-16
 
 ### Added
 - Phase 2 external-tagging surface (for deployments where the internal vision
