@@ -68,12 +68,17 @@ func (s *Server) registerOutfitTools() {
 	), s.handleDeleteOutfit)
 
 	s.add(mcp.NewTool("wardrowbe_get_recent_outfits",
-		mcp.WithDescription("List recent outfits, optionally filtered by status."),
+		mcp.WithDescription("List recent outfits, optionally filtered by status. Set compact=true "+
+			"for a slim projection (id/name/status/occasion/scheduled_for/created_at + item id/type/name) — "+
+			"roughly 20x smaller than the full payload; use it for dedupe/overview checks and fetch "+
+			"individual outfits with wardrowbe_get_outfit when you need details."),
 		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithInteger("limit", mcp.Description("Max outfits (1-20)."),
 			mcp.DefaultNumber(10), mcp.Min(1), mcp.Max(20)),
 		mcp.WithString("status", mcp.Description("Filter by status."),
 			mcp.Enum("pending", "accepted", "rejected", "skipped")),
+		mcp.WithBoolean("compact", mcp.Description("Return the slim projection instead of full "+
+			"outfit objects (which embed every item with signed image URLs). Default false.")),
 	), s.handleRecentOutfits)
 
 	s.add(mcp.NewTool("wardrowbe_accept_latest_outfit",
@@ -254,11 +259,59 @@ func (s *Server) handleRecentOutfits(ctx context.Context, req mcp.CallToolReques
 		}
 		q.Set("status", status)
 	}
+	compact, _, errRes := argBool(req, "compact")
+	if errRes != nil {
+		return errRes, nil
+	}
 	raw, err := s.client.Request(ctx, http.MethodGet, "/outfits", q, nil)
 	if err != nil {
 		return toolErr("recent outfits fetch failed", err), nil
 	}
-	return jsonText(raw), nil
+	if !compact {
+		return jsonText(raw), nil
+	}
+	return compactOutfitList(raw)
+}
+
+// compactOutfitItem / compactOutfit are field whitelists over the backend's
+// OutfitListResponse: decoding drops everything not named here (reasoning,
+// weather, feedback, per-item signed image URLs, ...), which is what shrinks
+// the payload. json.Unmarshal ignores unknown fields by design.
+type compactOutfitItem struct {
+	ID   string  `json:"id"`
+	Type string  `json:"type,omitempty"`
+	Name *string `json:"name,omitempty"`
+}
+
+type compactOutfit struct {
+	ID           string              `json:"id"`
+	Name         *string             `json:"name,omitempty"`
+	Status       string              `json:"status"`
+	Occasion     string              `json:"occasion,omitempty"`
+	ScheduledFor *string             `json:"scheduled_for,omitempty"`
+	CreatedAt    string              `json:"created_at,omitempty"`
+	Items        []compactOutfitItem `json:"items"`
+}
+
+type compactOutfitListPage struct {
+	Outfits []compactOutfit `json:"outfits"`
+	Total   *int            `json:"total,omitempty"`
+	HasMore *bool           `json:"has_more,omitempty"`
+}
+
+// compactOutfitList projects the backend's full outfit list onto the compact
+// shape. A full get_recent_outfits response at limit 20 runs to ~85k chars
+// (every outfit embeds complete item objects with signed image URLs), which
+// overwhelms tool-result token budgets when the caller only needs an overview.
+func compactOutfitList(raw json.RawMessage) (*mcp.CallToolResult, error) {
+	var page compactOutfitListPage
+	if err := json.Unmarshal(raw, &page); err != nil {
+		return toolErr("compact projection failed (backend response did not match the expected shape)", err), nil
+	}
+	if page.Outfits == nil {
+		page.Outfits = []compactOutfit{}
+	}
+	return marshalText(page)
 }
 
 func (s *Server) latestOutfitAction(action string) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {

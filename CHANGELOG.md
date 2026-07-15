@@ -26,6 +26,12 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     5-minute timeout.
 
 ### Added
+- `compact` boolean on `wardrowbe_get_recent_outfits`: returns a slim
+  projection (outfit id/name/status/occasion/scheduled_for/created_at, items as
+  id/type/name, plus total/has_more) instead of full outfit objects, which
+  embed every item with signed image URLs and run to ~85k chars at limit 20.
+  Use it for dedupe/overview checks; fetch details per outfit with
+  `wardrowbe_get_outfit`.
 - Phase 2 external-tagging surface (for deployments where the internal vision
   model is off and an external agent owns tagging):
   - `wardrowbe_list_items` gains a `tagging_status` filter (`pending` | `tagged`),
