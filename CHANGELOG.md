@@ -6,6 +6,12 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Security
+- Bumped the Go toolchain to 1.25.12 (go.mod, CI, release, Docker base image):
+  1.25.11's `crypto/tls` carries a known vulnerability that govulncheck flags
+  on every CI run (the `security` job had been failing on master since the
+  advisory landed). No code changes.
+
 ### Fixed
 - Intermittent `MCP server connection lost` errors from the claude.ai connector
   (typically on the first call after idle or one of two concurrent calls, with
