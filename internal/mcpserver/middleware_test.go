@@ -84,6 +84,42 @@ func TestPanicRecoveryReturns500(t *testing.T) {
 	}
 }
 
+// initializeMCP POSTs a JSON-RPC initialize request through the full HTTP
+// handler and returns the recorder, so tests can inspect transport behavior.
+func initializeMCP(t *testing.T, srv *Server) *httptest.ResponseRecorder {
+	t.Helper()
+	body := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{` +
+		`"protocolVersion":"2025-03-26","capabilities":{},` +
+		`"clientInfo":{"name":"test","version":"1"}}}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer secret-key")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	srv.HTTPHandler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("initialize status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+	return rec
+}
+
+func TestStatelessModeIssuesNoSessionID(t *testing.T) {
+	srv := testServer(t, "")
+	srv.cfg.Stateless = true
+	rec := initializeMCP(t, srv)
+	if got := rec.Header().Get("Mcp-Session-Id"); got != "" {
+		t.Errorf("stateless initialize returned session id %q, want none", got)
+	}
+}
+
+func TestStatefulModeIssuesSessionID(t *testing.T) {
+	srv := testServer(t, "") // testServer leaves cfg.Stateless=false
+	rec := initializeMCP(t, srv)
+	if rec.Header().Get("Mcp-Session-Id") == "" {
+		t.Error("stateful initialize returned no session id")
+	}
+}
+
 func TestMCPWithCorrectBearerPassesGate(t *testing.T) {
 	srv := testServer(t, "")
 	rec := httptest.NewRecorder()

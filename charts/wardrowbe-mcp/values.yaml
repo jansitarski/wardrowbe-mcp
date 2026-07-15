@@ -35,6 +35,11 @@ config:
   portalResourceUrl: ""
   # Inbound /mcp body cap (MB). Empty => the binary's own default (40).
   maxBodyMb: ""
+  # Stateless Streamable HTTP mode. Empty => the binary's own default (true:
+  # every POST self-contained, no server-side MCP sessions). Set the STRING
+  # "false" to restore stateful sessions (a bare false would be skipped by the
+  # template and silently keep the default).
+  stateless: ""
   # Any additional raw flags, e.g. ["--oidc-issuer=https://..."].
   extraArgs: []
 

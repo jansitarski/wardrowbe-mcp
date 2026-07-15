@@ -97,9 +97,14 @@ func serveHTTP(cfg config.Config, srv *mcpserver.Server, logger *slog.Logger) er
 		Addr:              cfg.Addr(),
 		Handler:           srv.HTTPHandler(),
 		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       60 * time.Second,  // full inbound request (incl. base64 uploads)
-		WriteTimeout:      6 * time.Minute,   // > backend client timeout (slow Ollama)
-		IdleTimeout:       120 * time.Second, // keep-alive idle ceiling
+		ReadTimeout:       60 * time.Second, // full inbound request (incl. base64 uploads)
+		// No WriteTimeout: it spans the whole response lifetime, so it would
+		// hard-kill any standing (heartbeated) SSE stream at exactly that mark
+		// regardless of activity. Handler work is already bounded by the backend
+		// client's 5-minute timeout, and a dead peer surfaces as a failed
+		// heartbeat/TCP write rather than lingering forever.
+		WriteTimeout: 0,
+		IdleTimeout:  120 * time.Second, // keep-alive idle ceiling
 	}
 
 	errCh := make(chan error, 1)

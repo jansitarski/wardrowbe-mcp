@@ -104,6 +104,7 @@ kubectl -n wardrowbe create secret generic wardrowbe-mcp-oidc \
 | `config.externalEmail` | `""` | Real email sent in dev `/auth/sync`. |
 | `config.portalResourceUrl` | `""` | Emits RFC 9728 `resource_metadata` on `401`. |
 | `config.maxBodyMb` | `""` | Inbound `/mcp` body cap MB (empty → default 40). |
+| `config.stateless` | `""` | Stateless Streamable HTTP (empty → default `true`). Set the string `"false"` to restore stateful sessions. |
 | `config.extraArgs` | `[]` | Additional raw flags. |
 | `oidc.issuerUrl` | `""` | OIDC issuer URL (flag; `config.auth=oidc`). |
 | `oidc.clientId` | `""` | OIDC client ID (flag; `config.auth=oidc`). |

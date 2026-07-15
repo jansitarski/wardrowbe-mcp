@@ -15,6 +15,13 @@ import (
 
 const mcpPath = "/mcp"
 
+// heartbeatInterval paces pings on any standing GET (listening) stream a client
+// holds open. The deployment chain (Anthropic proxy → Cloudflare Access → CF
+// edge → cloudflared) silently kills streamed responses that go ~100s without
+// bytes; the client only discovers the dead stream on its next call, which then
+// fails with "connection lost". 25s keeps well under that ceiling.
+const heartbeatInterval = 25 * time.Second
+
 // readinessTimeout bounds the backend ping behind /readyz.
 const readinessTimeout = 3 * time.Second
 
@@ -33,10 +40,14 @@ const readyCacheTTL = 1 * time.Second
 // wrapped with panic recovery so a panic in any layer returns a clean 500
 // instead of a dropped connection.
 func (s *Server) HTTPHandler() http.Handler {
-	streamable := server.NewStreamableHTTPServer(
-		s.mcp,
+	opts := []server.StreamableHTTPOption{
 		server.WithEndpointPath(mcpPath),
-	)
+		server.WithHeartbeatInterval(heartbeatInterval),
+	}
+	if s.cfg.Stateless {
+		opts = append(opts, server.WithStateLess(true))
+	}
+	streamable := server.NewStreamableHTTPServer(s.mcp, opts...)
 
 	mcpHandler := s.bearerGate(streamable)
 	mcpHandler = http.MaxBytesHandler(mcpHandler, s.cfg.MaxBodyBytes)

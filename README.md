@@ -125,6 +125,7 @@ The most-used ones:
 | `--oidc-id-token` | — | Static `id_token` used when no refresh token is configured. |
 | `--oidc-token-endpoint` | — | Optional https token-endpoint override (skips OIDC discovery). |
 | `--max-body-mb` | `40` | Inbound `/mcp` body cap. |
+| `--stateless` | `true` | Stateless Streamable HTTP: every POST is self-contained, no server-side MCP sessions (survives restarts/idle proxies). Set `false` to restore stateful sessions. |
 | `--portal-resource-url` | — | Emits the RFC 9728 `resource_metadata` on `401`. |
 
 In `oidc` mode the raw `id_token` is forwarded in the `/auth/sync` body so the
@@ -156,6 +157,7 @@ echoed in `--help` output or flag-error usage text.
 | `413` / request rejected | Body exceeds cap | Raise `--max-body-mb` (default 40) for large base64 uploads. |
 | `wardrowbe_create_item_from_url` refuses a URL | SSRF guard / non-public host | The URL must be `http(s)` and resolve to a public IP; private/loopback/link-local/multicast/NAT64 targets are blocked. |
 | OIDC refresh fails with `invalid_grant` | Refresh token expired/rotated out | Issue a fresh refresh token. The server follows rotation automatically while running, but the rotated token is held in memory only — after a restart it resumes from the configured token, which a rotation-enforcing IdP may have invalidated. Re-issue and update `MCP_OIDC_REFRESH_TOKEN` whenever this happens; with such IdPs also run a single replica (a shared refresh token across replicas trips reuse detection). |
+| Intermittent `MCP server connection lost` from the connector (retry succeeds) | Stale stream/session between proxy hops | The server heartbeats standing streams every 25s and runs stateless by default, which resolves this. If you set `--stateless=false`, note that sessions live in pod memory: every restart invalidates them and the connector's next call fails once. |
 | Startup log warns about dev auth | `--auth dev` on http | Expected for a single user; set `--auth oidc` for real per-user identity. |
 | Process exits at startup with "invalid …" | Bad flag/env value | The config is validated up front — the message names the offending flag/env var. |
 

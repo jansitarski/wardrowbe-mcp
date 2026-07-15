@@ -317,6 +317,37 @@ func TestToolsHappyPath(t *testing.T) {
 	}
 }
 
+// TestRecentOutfitsCompact drives the compact projection end-to-end: the mock
+// backend's outfits embed full item objects (with image URLs); compact=true
+// must strip those down to id/type/name while keeping the overview fields.
+func TestRecentOutfitsCompact(t *testing.T) {
+	c := newTestClient(t, mockBackend(t).URL)
+
+	full := firstText(call(t, c, "wardrowbe_get_recent_outfits", map[string]any{"limit": 5}))
+	if !strings.Contains(full, "thumbnail_url") {
+		t.Fatalf("full response should carry item URLs:\n%s", full)
+	}
+
+	res := call(t, c, "wardrowbe_get_recent_outfits", map[string]any{"limit": 5, "compact": true})
+	if res.IsError {
+		t.Fatalf("compact call failed: %s", firstText(res))
+	}
+	compact := firstText(res)
+	for _, want := range []string{"outfit-1", "outfit-2", "Blue Shirt", "pending"} {
+		if !strings.Contains(compact, want) {
+			t.Errorf("compact response missing %q:\n%s", want, compact)
+		}
+	}
+	for _, dropped := range []string{"thumbnail_url", "medium_url", "image_url", "wear_count"} {
+		if strings.Contains(compact, dropped) {
+			t.Errorf("compact response should drop %q:\n%s", dropped, compact)
+		}
+	}
+	if len(compact) >= len(full) {
+		t.Errorf("compact (%d chars) should be smaller than full (%d chars)", len(compact), len(full))
+	}
+}
+
 // TestCreateItemFromURL covers the external-fetch tool against the loopback mock
 // by swapping the SSRF-guarded transport for a plain one (the guard itself is
 // covered by TestToolGuards). The upload path it shares with the base64 tool is
