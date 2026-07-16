@@ -290,7 +290,7 @@ func TestToolsHappyPath(t *testing.T) {
 		{name: "wardrowbe_update_item", args: map[string]any{"item_id": "item-1", "name": "New", "primary_color": "navy", "colors": []any{"navy", "white"}, "wash_interval": 3, "favorite": true}},
 		{name: "wardrowbe_set_item_tags", args: map[string]any{"item_id": "item-1", "colors": []any{"blue"}, "pattern": "solid", "material": "cotton", "style": []any{"smart-casual"}, "season": []any{"summer"}, "formality": "casual", "fit": "slim"}},
 		{name: "wardrowbe_set_item_description", args: map[string]any{"item_id": "item-1", "description": "A nice blue shirt"}},
-		{name: "wardrowbe_create_item_from_base64", args: map[string]any{"image_base64": tinyPNG, "filename": "shirt.png", "name": "Uploaded", "type": "shirt", "auto_tag": false}},
+		{name: "wardrowbe_create_item_from_base64", args: map[string]any{"image_base64": tinyPNG, "filename": "shirt.png", "name": "Uploaded", "type": "shirt", "skip_ai": true}},
 	}
 
 	for _, tt := range cases {

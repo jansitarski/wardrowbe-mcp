@@ -6,6 +6,15 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+- Renamed the `auto_tag` boolean on both create tools
+  (`wardrowbe_create_item_from_url`, `wardrowbe_create_item_from_base64`) to
+  `skip_ai` with inverted polarity: set `true` to leave the new item pending
+  for external tagging. This matches the flag the backend now exposes on both
+  `POST /items` and `POST /items/bulk` (Anyesh/wardrowbe#120 after upstream
+  #128). Against a backend that still expects `auto_tag`, the field is ignored
+  and new items are simply auto-tagged as before.
+
 ## [1.1.0] - 2026-07-16
 
 ### Added
