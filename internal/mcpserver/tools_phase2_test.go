@@ -130,8 +130,8 @@ func TestSetItemTagsSendsSingleTagsPayload(t *testing.T) {
 	}
 }
 
-// Gap 3a — auto_tag=false is forwarded as a multipart form field on create.
-func TestCreateForwardsAutoTag(t *testing.T) {
+// Gap 3a — skip_ai=true is forwarded as a multipart form field on create.
+func TestCreateForwardsSkipAI(t *testing.T) {
 	var cap capturedRequest
 	var formValue string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -140,7 +140,7 @@ func TestCreateForwardsAutoTag(t *testing.T) {
 			return
 		}
 		_ = r.ParseMultipartForm(8 << 20)
-		formValue = r.FormValue("auto_tag")
+		formValue = r.FormValue("skip_ai")
 		cap.method, cap.path = r.Method, r.URL.Path
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{"id": "item-new", "tagging_status": "pending"})
@@ -153,7 +153,7 @@ func TestCreateForwardsAutoTag(t *testing.T) {
 
 	res, err := s.handleCreateItemFromBase64(context.Background(), toolReq(map[string]any{
 		"image_base64": "data:image/png;base64," + pngB64(),
-		"auto_tag":     false,
+		"skip_ai":      true,
 	}))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -161,8 +161,8 @@ func TestCreateForwardsAutoTag(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("tool error: %s", firstErrText(res))
 	}
-	if formValue != "false" {
-		t.Errorf("auto_tag form field = %q, want false", formValue)
+	if formValue != "true" {
+		t.Errorf("skip_ai form field = %q, want true", formValue)
 	}
 }
 
