@@ -30,9 +30,11 @@ folder of photos, upload to a temporary host and pass URLs.
 
 ### Temporary host: litterbox (recommended)
 
-`0x0.st` is currently disabled (AI-spam). Use **litterbox.catbox.moe** — URLs
-auto-expire (no manual cleanup, and the backend downloads its own copy immediately, so
-the public window is brief). One file:
+`0x0.st` is currently disabled (AI-spam). Permanent **catbox.moe** is unreliable: it
+can return an upload URL that then serves **HTTP 200 with a 0-byte body**, which the
+backend surfaces as `could not fetch image: image is empty`. Use
+**litterbox.catbox.moe** instead — URLs auto-expire (no manual cleanup, and the
+backend downloads its own copy immediately, so the public window is brief). One file:
 
 ```bash
 curl -s -A "Mozilla/5.0" \
@@ -40,6 +42,13 @@ curl -s -A "Mozilla/5.0" \
   -F "fileToUpload=@photo.webp" \
   https://litterbox.catbox.moe/resources/internals/api.php
 # -> https://litter.catbox.moe/xxxxxx.webp
+```
+
+**Verify every URL actually serves bytes before creating items** (guards against the
+empty-body failure mode):
+
+```bash
+curl -sS -o /dev/null -w "%{http_code} %{size_download}\n" "$url"   # want 200 + full size
 ```
 
 Batch a folder, capturing a `filename|||url` map (run via a **script file**, not an
@@ -103,6 +112,14 @@ The backend auto-tagger runs **asynchronously, 1–3.5 hours after creation**, f
 `status: processing → ready` and `ai_processed: false → true`. When it runs it
 **overwrites** `colors`, `material`, `pattern` and the `tags` object with its weak
 guesses — silently undoing your work if you tagged too early.
+
+**Exception — backend vision disabled.** Some deployments run with vision off: every
+create defers, items land `status: "ready"` with `tagging_status: "pending"` /
+`ai_processed: false` and **stay that way indefinitely** (hours-to-days old items
+still pending is the tell). In that mode there is no async tagger and no clobber
+risk — tag **immediately**. `wardrowbe_list_untagged_items` is the work queue;
+`wardrowbe_set_item_tags` flips the item to `tagging_status: "tagged"`,
+`tagged_by: "manual"` and clears it from the queue.
 
 **Rule: only apply your tags after `ai_processed == true`.** Tags applied while an item
 is still `processing` will be clobbered. Workflow:
